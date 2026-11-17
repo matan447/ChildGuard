@@ -355,6 +355,7 @@ const appState = {
   refuelSecondsLeft: 0,
   graceTimer: null,
   graceSecondsLeft: 0,
+  quickSoloTimer: null,
   simTimers: [],
   escalationTimer: null,
   escalationSecondsLeft: 0,
@@ -362,6 +363,8 @@ const appState = {
   prevFix: null,
   lastFix: null,
   startFix: null,
+  stationaryAnchorFix: null,
+  tripOriginPlaceId: '',
   tripStartTime: null,
   currentSpeedKmh: 0,
   maxSpeedKmh: 0,
@@ -452,6 +455,9 @@ const els = {
   coupleProtectionBanner: document.getElementById('couple-protection-banner'),
   coupleProtectionText: document.getElementById('couple-protection-text'),
   cancelSuppressionBtn: document.getElementById('cancel-suppression-btn'),
+  quickSoloBanner: document.getElementById('quick-solo-banner'),
+  quickSoloBtn: document.getElementById('quick-solo-btn'),
+  quickSoloDismissBtn: document.getElementById('quick-solo-dismiss-btn'),
   pickupSyncBar: document.getElementById('pickup-sync-bar'),
   pickupStatusBadge: document.getElementById('pickup-status-badge'),
   btnSoloNow: document.getElementById('btn-solo-now'),
@@ -1383,16 +1389,62 @@ function isMicroTrip() {
   return elapsedSec < 120 && distM < 150 && appState.maxSpeedKmh < 25;
 }
 
+function detectLocalPlace(fix = appState.lastFix, explicitPlaceId = null) {
+  const places = Array.isArray(appState.settings.savedPlaces) ? appState.settings.savedPlaces : [];
+  if (explicitPlaceId) {
+    return places.find((p) => p.id === explicitPlaceId) || null;
+  }
+  if (!fix || typeof fix.lat !== 'number' || typeof fix.lon !== 'number') return null;
+  for (const p of places) {
+    if (haversineM(fix.lat, fix.lon, p.lat, p.lon) <= (p.radiusM || 150)) {
+      return p;
+    }
+  }
+  return null;
+}
+
+function cancelAlarmOnTrafficResume() {
+  appState.verifiedCloseInProgress = true;
+  stopAlarmOutputs();
+  stopEscalationCountdown();
+  stopQrCamera();
+  cancelAnimationFrame(appState.holdRaf);
+  if (els.alarmDialog.open) {
+    els.alarmDialog.close('traffic_resumed');
+  }
+  appState.stationaryAnchorFix = null;
+  setStatus('DRIVING', 'זוהה חידוש נסיעה בפקק / רמזור – ההתרעה בוטלה אוטומטית.');
+  apiPostEvent('TRIP_START', {
+    originPlaceId: appState.tripOriginPlaceId,
+    lat: appState.lastFix?.lat,
+    lon: appState.lastFix?.lon
+  });
+}
+
 function handleSpeedSample(speedKmh, accuracy = null) {
   updateSpeedTelemetry(speedKmh, accuracy);
-  if (!appState.settings.autoDetect || appState.status === 'ALARM_ACTIVE') return;
+  if (!appState.settings.autoDetect) return;
+
+  if (appState.status === 'ALARM_ACTIVE') {
+    if (!appState.challengeUnlocked && speedKmh >= 6) {
+      cancelAlarmOnTrafficResume();
+    }
+    return;
+  }
 
   if (['MONITORING', 'VERIFIED', 'IDLE', 'REFUEL_PAUSE'].includes(appState.status)) {
     if (speedKmh >= appState.settings.speedThresholdKmh) {
       clearRefuelTimer();
+      appState.stationaryAnchorFix = null;
       appState.tripStartTime = appState.tripStartTime || Date.now();
+      const originPlace = detectLocalPlace(appState.startFix || appState.lastFix);
+      appState.tripOriginPlaceId = originPlace?.id || '';
       setStatus('DRIVING');
-      apiPostEvent('TRIP_START');
+      apiPostEvent('TRIP_START', {
+        originPlaceId: appState.tripOriginPlaceId,
+        lat: appState.lastFix?.lat,
+        lon: appState.lastFix?.lon
+      });
     }
     return;
   }
@@ -1401,18 +1453,48 @@ function handleSpeedSample(speedKmh, accuracy = null) {
     if (speedKmh < 3) {
       if (isMicroTrip()) {
         apiPostEvent('MICRO_TRIP_FILTERED', { durationSec: Math.round((Date.now() - appState.tripStartTime) / 1000), distanceM: 30 });
+        appState.stationaryAnchorFix = null;
         setStatus('IDLE', 'נסיעת סרק קצרה (הזזת חניה) סוננה בשקט ללא התראה.');
         return;
       }
-      const delay = appState.ambientTempC >= 28 ? Math.min(appState.settings.stopDelaySeconds, 20) : appState.settings.stopDelaySeconds;
-      startStopCountdown(delay, 'זיהוי עצירה אוטומטי בסיום נסיעה');
+      const atPlace = detectLocalPlace(appState.lastFix);
+      if (!atPlace && appState.lastFix) {
+        appState.stationaryAnchorFix = appState.stationaryAnchorFix || appState.lastFix;
+      }
+      const baseDelay = Number(appState.settings.stopDelaySeconds) || 60;
+      const delay = atPlace ? Math.max(60, baseDelay) : Math.max(180, baseDelay);
+      startStopCountdown(
+        delay,
+        atPlace
+          ? `עצירה ביעד קבוע (${atPlace.icon} ${atPlace.name})`
+          : 'עצירה ממושכת מחוץ ליעד קבוע'
+      );
+    } else if (speedKmh >= 6) {
+      appState.stationaryAnchorFix = null;
     }
     return;
   }
 
-  if (appState.status === 'STOPPING' && speedKmh >= 6) {
-    cancelStopCountdown();
-    setStatus('DRIVING');
+  if (appState.status === 'STOPPING') {
+    const movedInTraffic =
+      appState.stationaryAnchorFix &&
+      appState.lastFix &&
+      haversineM(
+        appState.stationaryAnchorFix.lat,
+        appState.stationaryAnchorFix.lon,
+        appState.lastFix.lat,
+        appState.lastFix.lon
+      ) > 25;
+    if (speedKmh >= 6 || movedInTraffic) {
+      cancelStopCountdown();
+      appState.stationaryAnchorFix = null;
+      setStatus(
+        'DRIVING',
+        movedInTraffic
+          ? 'זוהתה התקדמות איטית בפקק – טיימר העצירה אופס.'
+          : 'התנועה התחדשה (רמזור / פקק) – ממשיך לנטר.'
+      );
+    }
   }
 }
 
@@ -1429,7 +1511,7 @@ function startStopCountdown(seconds, reason) {
       await triggerEndOfTripFlow({ reason });
     } else {
       els.stopCountdownValue.textContent = `${appState.stopSecondsLeft} שנ'`;
-      els.stateDescription.textContent = `הרכב עצר! ממתין ${appState.stopSecondsLeft} שנ' (ניתן לנסוע שוב אם זו רק עצירת רמזור).`;
+      els.stateDescription.textContent = `הרכב עצר! ממתין ${appState.stopSecondsLeft} שנ' (כדי לא להפריע ברמזור או בפקק).`;
     }
   }, 1000);
 }
@@ -1464,11 +1546,18 @@ function startMonitoring(startAsDriving = false, silentAuto = false) {
   appState.maxSpeedKmh = 0;
   appState.prevFix = null;
   appState.startFix = null;
+  appState.stationaryAnchorFix = null;
   appState.tripStartTime = Date.now();
   updateSpeedTelemetry(startAsDriving ? appState.settings.speedThresholdKmh : 0);
 
   if (startAsDriving) {
-    apiPostEvent('TRIP_START');
+    const originPlace = detectLocalPlace(appState.lastFix);
+    appState.tripOriginPlaceId = originPlace?.id || '';
+    apiPostEvent('TRIP_START', {
+      originPlaceId: appState.tripOriginPlaceId,
+      lat: appState.lastFix?.lat,
+      lon: appState.lastFix?.lon
+    });
   }
 
   if (!('geolocation' in navigator)) {
@@ -1537,10 +1626,14 @@ async function triggerEndOfTripFlow(options = {}) {
     forceBrokenRoutine = false,
     tempC = appState.ambientTempC,
     bypassPreBeep = false,
-    stageLabel = null
+    stageLabel = null,
+    isDemo = false
   } = options;
 
-  if (!bypassPreBeep && !forceBrokenRoutine) {
+  const detectedPlace = detectLocalPlace(appState.lastFix, placeId);
+  const resolvedPlaceId = placeId || detectedPlace?.id || null;
+
+  if (!bypassPreBeep && !forceBrokenRoutine && resolvedPlaceId !== 'daycare') {
     const check = await checkPreBeepShouldAlarm(false);
     if (!check.alarmRequired) {
       setStatus('IDLE', `ההתרעה נחסכה (${check.reason}) – אין שום הפרעה מיותרת.`);
@@ -1549,8 +1642,10 @@ async function triggerEndOfTripFlow(options = {}) {
   }
 
   const res = await apiPostEvent('TRIP_END', {
-    placeId,
+    placeId: resolvedPlaceId,
+    originPlaceId: appState.tripOriginPlaceId,
     forceBrokenRoutine,
+    isDemo,
     immediateAlarm: true,
     tempC,
     lat: appState.lastFix?.lat,
@@ -1558,12 +1653,22 @@ async function triggerEndOfTripFlow(options = {}) {
   });
 
   if (res?.meta?.suppressed && !forceBrokenRoutine) {
-    const msg =
-      res.meta.suppressReason === 'SOLO_CONTINUE'
-        ? '👶➡️💼 מאושר! הורדת בגן הבוקר – נסיעת ההמשך לעבודה הושתקה אוטומטית בלי שום התרעה!'
-        : '🔧 מצב מוסך/שטיפה פעיל – ההתרעה דולגה בשקט.';
-    setStatus('IDLE', msg);
-    return { suppressed: true, reason: res.meta.suppressReason };
+    const reasonCode = res.meta.suppressReason;
+    const messages = {
+      SOLO_CONTINUE: '👶➡️💼 מאושר! הורדת בגן הבוקר – נסיעת ההמשך לעבודה הושתקה אוטומטית בלי שום התרעה!',
+      LEFT_WORK_SOLO: '🚗 יציאה ממקום העבודה לבד – ההתרעה הושתקה אוטומטית בלי שום צפצוף!',
+      PARTNER_RESPONSIBLE_SOLO: '🚗 הגעה לעבודה לבד (בן/בת הזוג באחריות היום) – ההתרעה הושתקה אוטומטית!',
+      DAYCARE_PICKUP_ARMED: '🧸 איסוף מהגן זוהה אוטומטית – הגנת מושב אחורי נדרכה לנסיעה הביתה!',
+      GARAGE: '🔧 מצב מוסך/שטיפה פעיל – ההתרעה דולגה בשקט.'
+    };
+    const msg = messages[reasonCode] || '✓ הנסיעה הושתקה אוטומטית לפי השגרה המשפחתית.';
+    if (reasonCode === 'DAYCARE_PICKUP_ARMED') {
+      if (appState.watchId === null) startMonitoring(false, true);
+      setStatus('MONITORING', msg);
+    } else {
+      setStatus('IDLE', msg);
+    }
+    return { suppressed: true, reason: reasonCode };
   }
 
   const isBroken = Boolean(forceBrokenRoutine || res?.meta?.brokenRoutine);
@@ -2193,6 +2298,7 @@ async function runDemoDaycareLeg() {
     reason: 'הגעה אל הגן של נועה',
     placeId: 'daycare',
     bypassPreBeep: true,
+    isDemo: true,
     stageLabel: '📍 זוהתה הגעה ליעד: 🧸 הגן של נועה'
   });
 }
@@ -2262,6 +2368,7 @@ async function runDemoHeatwave() {
     reason: 'חניה בטמפרטורה קיצונית (35°C)',
     tempC: 35,
     bypassPreBeep: true,
+    isDemo: true,
     stageLabel: '☀️ אזהרת שרב (35°C): השהיה קוצרה לסכנת חום מיידית!'
   });
 }
@@ -3243,6 +3350,21 @@ function bindEvents() {
     });
   }
 
+  if (els.quickSoloBtn) {
+    els.quickSoloBtn.addEventListener('click', async () => {
+      clearTimeout(appState.quickSoloTimer);
+      if (els.quickSoloBanner) els.quickSoloBanner.hidden = true;
+      await apiPostEvent('SOLO_DRIVE', { clear: false });
+      showDemoFeedback('<strong>🚗 נסיעה לבד הופעלה:</strong> ההתרעות לנסיעה זו הושתקו לשעתיים הקרובות.', 'info');
+    });
+  }
+  if (els.quickSoloDismissBtn) {
+    els.quickSoloDismissBtn.addEventListener('click', () => {
+      clearTimeout(appState.quickSoloTimer);
+      if (els.quickSoloBanner) els.quickSoloBanner.hidden = true;
+    });
+  }
+
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       apiFetchState();
@@ -3251,6 +3373,15 @@ function bindEvents() {
       }
     }
   });
+}
+
+function showQuickSoloBanner() {
+  if (!els.quickSoloBanner) return;
+  clearTimeout(appState.quickSoloTimer);
+  els.quickSoloBanner.hidden = false;
+  appState.quickSoloTimer = setTimeout(() => {
+    if (els.quickSoloBanner) els.quickSoloBanner.hidden = true;
+  }, 12000);
 }
 
 async function handleDeepLinkParams() {
@@ -3271,6 +3402,7 @@ async function handleDeepLinkParams() {
     });
   } else if (action === 'start_drive') {
     startMonitoring(true);
+    showQuickSoloBanner();
   }
 }
 
