@@ -642,31 +642,21 @@ function isDefaultColdSeed(data) {
   );
 }
 
-function isLegacySingleDaycareSnapshot(data) {
-  return (
-    Array.isArray(data?.savedPlaces) &&
-    data.savedPlaces.length === 1 &&
-    data.savedPlaces[0]?.id === 'daycare' &&
-    Number(data.savedPlaces[0]?.lat).toFixed(2) === '29.54'
-  );
-}
-
 function applyRemoteState(data) {
   if (!data || typeof data !== 'object') return;
-  const remoteUpdatedMs = Date.parse(data?.coupleStatus?.updatedAt || '') || 0;
+  const remoteUpdatedMs = Date.parse(data?.coupleStatus?.updatedAt || data?.updatedAt || '') || 0;
   const localUpdatedMs = Date.parse(appState.settings.localUpdatedAt || '') || 0;
   const localPlacesMs = Date.parse(appState.settings.placesUpdatedAt || '') || 0;
   const remotePlacesMs = Date.parse(data?.placesUpdatedAt || '') || 0;
   const isCold = isDefaultColdSeed(data);
-  const isLegacyDaycare = isLegacySingleDaycareSnapshot(data);
   const remoteIsStale = (localUpdatedMs > 0 && remoteUpdatedMs > 0 && remoteUpdatedMs + 500 < localUpdatedMs) || (localUpdatedMs > 0 && isCold);
 
   const shouldApplyRemotePlaces =
     Array.isArray(data.savedPlaces) &&
     !remoteIsStale &&
-    !isLegacyDaycare &&
     (remotePlacesMs > localPlacesMs + 500 ||
-      (localPlacesMs === 0 && !isCold && data.savedPlaces.length >= (appState.settings.savedPlaces?.length || 0)));
+      (remotePlacesMs === 0 && remoteUpdatedMs > localPlacesMs + 1500 && !isCold) ||
+      (localPlacesMs === 0 && !isCold));
 
   appState.coupleState = {
     ...data,
@@ -2362,6 +2352,42 @@ async function geocodeAddress(addressQuery) {
   const q = (addressQuery || '').trim();
   if (!q) return null;
 
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+    try {
+      const arcRes = await fetch(
+        `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&SingleLine=${encodeURIComponent(q)}&countryCode=ISR&maxLocations=5&outFields=Match_addr,Addr_type,StAddr,City`,
+        { signal: controller.signal }
+      );
+      if (arcRes.ok) {
+        const arcJson = await arcRes.json();
+        const candidates = Array.isArray(arcJson?.candidates) ? arcJson.candidates : [];
+        const preferredTypes = { PointAddress: 3, StreetAddress: 2, StreetInt: 2, StreetName: 1 };
+        const sorted = candidates
+          .filter((c) => Number.isFinite(Number(c?.location?.y)) && Number.isFinite(Number(c?.location?.x)))
+          .sort((a, b) => {
+            const scoreDiff = (Number(b.score) || 0) - (Number(a.score) || 0);
+            if (Math.abs(scoreDiff) > 4) return scoreDiff;
+            const typeA = preferredTypes[a.attributes?.Addr_type] || 0;
+            const typeB = preferredTypes[b.attributes?.Addr_type] || 0;
+            return typeB - typeA;
+          });
+        if (sorted.length > 0) {
+          const best = sorted[0];
+          const lat = Number(best.location.y);
+          const lon = Number(best.location.x);
+          const displayName = best.attributes?.Match_addr || best.address || q;
+          return { lat, lon, displayName };
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // Fall back to Nominatim if ArcGIS fails or is blocked
+  }
+
   const queryNominatim = async (useIsraelBias) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 7000);
@@ -2403,6 +2429,26 @@ async function geocodeAddress(addressQuery) {
 }
 
 async function reverseGeocode(lat, lon) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    try {
+      const arcRes = await fetch(
+        `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=json&location=${encodeURIComponent(lon)},${encodeURIComponent(lat)}&langCode=HE`,
+        { signal: controller.signal }
+      );
+      if (arcRes.ok) {
+        const arcData = await arcRes.json();
+        const label = arcData?.address?.Match_addr || arcData?.address?.LongLabel;
+        if (label) return label;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // Fall back to Nominatim
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 6000);
   try {
@@ -2533,19 +2579,24 @@ function renderPlaces(force = false) {
     gpsBtn.textContent = '📍 מיקום נוכחי';
     gpsBtn.addEventListener('click', async () => {
       const applyGpsFix = async (lat, lon, accuracy = null) => {
-        gpsBtn.textContent = 'מאכן כתובת...';
-        const resolvedAddress = await reverseGeocode(lat, lon);
+        const existingAddr = addrInput.value.trim();
+        const shouldAutoFillAddr = !existingAddr || existingAddr === 'תל אביב';
+        let resolvedAddress = '';
+        if (shouldAutoFillAddr) {
+          gpsBtn.textContent = 'מאכן כתובת...';
+          resolvedAddress = await reverseGeocode(lat, lon);
+        }
         gpsBtn.disabled = false;
         gpsBtn.textContent = '📍 מיקום נוכחי';
 
         p.lat = lat;
         p.lon = lon;
         p.name = nameInput.value.trim() || p.name;
-        if (resolvedAddress) {
+        if (shouldAutoFillAddr && resolvedAddress) {
           p.address = resolvedAddress;
           addrInput.value = resolvedAddress;
         } else {
-          p.address = addrInput.value.trim();
+          p.address = existingAddr;
         }
         appState.settings.savedPlaces = places;
         if (appState.coupleState) appState.coupleState.savedPlaces = places;
