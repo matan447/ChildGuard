@@ -143,11 +143,11 @@
         <h2 id="monitor-heading" class="sr-only">מצב ניטור נסיעה</h2>
         <div id="status-pill" class="status-pill" data-state="IDLE">
           <span class="status-dot" aria-hidden="true"></span>
-          <span id="status-label">מוכן לניטור נסיעה</span>
+          <span id="status-label">ניטור אוטומטי פעיל</span>
         </div>
         <div class="badges-row">
           <span id="firebase-badge" class="mini-badge" data-ready="false">☁️ Firebase מתחבר...</span>
-          <span id="temp-badge" class="mini-badge">🌡️ —</span>
+          <span id="temp-badge" class="mini-badge" role="button" tabindex="0" title="לחץ לעדכון טמפרטורה חיה">🌡️ טוען...</span>
           <span id="audio-badge" class="mini-badge" data-ready="false">סירנה תידרך בלחיצה</span>
           <span id="wakelock-badge" class="mini-badge" data-ready="false">מסך רגיל</span>
         </div>
@@ -167,7 +167,7 @@
 
         <div class="telemetry-details">
           <p id="state-description" class="state-description">
-            המערכת מוכנה. באייפון היא מופעלת אוטומטית דרך קיצורי הדרך (Bluetooth/CarPlay) גם כשהמסך כבוי, וכאן ניתן גם להפעיל ניטור ישיר או סימולציה.
+            הניטור האוטומטי מופעל מיד עם פתיחת האפליקציה, ובאייפון מופעל אוטומטית גם דרך קיצורי הדרך (Bluetooth/CarPlay).
           </p>
           <div class="telemetry-meta">
             <div class="meta-box">
@@ -196,7 +196,7 @@
 
       <div class="primary-actions">
         <button type="button" id="toggle-monitor-btn" class="btn-primary btn-xl">
-          התחל ניטור נסיעה (GPS)
+          ניטור אוטומטי פעיל (לחץ להשהיה)
         </button>
         <div class="sim-actions">
           <button type="button" id="simulate-trip-btn" class="btn-secondary">
@@ -247,8 +247,13 @@
       <p class="section-sub">ערוך כאן את שם המקום והכתובת המלאה, או הוסף מקומות חדשים. לחיצה על "חפש כתובת ושמור" מתרגמת את הכתובת למיקום GPS</p>
 
       <form id="add-place-form" class="inline-form place-add-form" autocomplete="off">
-        <label class="sr-only" for="new-place-icon">אייקון</label>
-        <input id="new-place-icon" type="text" value="📍" maxlength="4" class="icon-input" aria-label="אייקון מקום">
+        <label class="sr-only" for="new-place-icon">סוג ואייקון</label>
+        <select id="new-place-icon" class="place-type-select" aria-label="סוג ואייקון מקום">
+          <option value="📍">📍 מקום אחר</option>
+          <option value="🏠|home">🏠 הבית</option>
+          <option value="🧸|daycare">🧸 גן / מעון</option>
+          <option value="💼|work">💼 עבודה</option>
+        </select>
         <label class="sr-only" for="new-place-name">שם המקום</label>
         <input id="new-place-name" type="text" placeholder="שם המקום (למשל: בית סבתא)" maxlength="48" required>
         <label class="sr-only" for="new-place-address">כתובת מלאה</label>

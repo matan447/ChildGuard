@@ -91,7 +91,7 @@ function createDefaultState() {
       state: 'IDLE',
       driverName: 'אני (אלון)',
       statusText: 'ממתין לנסיעה הראשונה היום',
-      updatedAt: new Date().toISOString(),
+      updatedAt: new Date(0).toISOString(),
       lastVerifiedAt: 0,
       soloContinueUntil: 0,
       snoozeUntil: 0,
@@ -463,6 +463,7 @@ export async function onRequest(context) {
           updatedAt: new Date().toISOString(),
           updatedBy: driverName
         };
+        cs.updatedAt = new Date().toISOString();
         break;
       }
 
@@ -485,14 +486,20 @@ export async function onRequest(context) {
             target.lon = payload.lon;
           }
         }
+        cs.updatedAt = new Date().toISOString();
         break;
       }
 
       case 'ADD_PLACE': {
         const name = typeof payload.name === 'string' ? payload.name.trim().slice(0, 48) : '';
         if (name) {
+          const requestedId =
+            typeof payload.placeId === 'string' && ['home', 'daycare', 'work'].includes(payload.placeId)
+              ? payload.placeId
+              : '';
+          const idTaken = requestedId && familyState.savedPlaces.some((p) => p.id === requestedId);
           familyState.savedPlaces.push({
-            id: 'p_' + now,
+            id: requestedId && !idTaken ? requestedId : 'p_' + now,
             icon: (typeof payload.icon === 'string' && payload.icon.trim()) || '📍',
             name,
             address: typeof payload.address === 'string' ? payload.address.trim().slice(0, 120) : '',
@@ -500,6 +507,7 @@ export async function onRequest(context) {
             lon: typeof payload.lon === 'number' && Number.isFinite(payload.lon) ? payload.lon : 34.7818,
             radiusM: 150
           });
+          cs.updatedAt = new Date().toISOString();
         }
         break;
       }
@@ -507,22 +515,27 @@ export async function onRequest(context) {
       case 'DELETE_PLACE': {
         if (payload.placeId) {
           familyState.savedPlaces = familyState.savedPlaces.filter((p) => p.id !== payload.placeId);
+          cs.updatedAt = new Date().toISOString();
         }
         break;
       }
 
       case 'UPDATE_PROFILES': {
-        familyState.profiles = {
-          myName:
-            (typeof payload.myName === 'string' && payload.myName.trim().slice(0, 32)) ||
-            familyState.profiles.myName,
-          partnerName:
-            (typeof payload.partnerName === 'string' && payload.partnerName.trim().slice(0, 32)) ||
-            familyState.profiles.partnerName,
-          guestName:
-            (typeof payload.guestName === 'string' && payload.guestName.trim().slice(0, 32)) ||
-            familyState.profiles.guestName
-        };
+        const myName =
+          (typeof payload.myName === 'string' && payload.myName.trim().slice(0, 32)) ||
+          familyState.profiles.myName;
+        const partnerName =
+          (typeof payload.partnerName === 'string' && payload.partnerName.trim().slice(0, 32)) ||
+          familyState.profiles.partnerName;
+        const guestName =
+          (typeof payload.guestName === 'string' && payload.guestName.trim().slice(0, 32)) ||
+          familyState.profiles.guestName;
+        familyState.profiles = { myName, partnerName, guestName };
+        cs.driverName = driverName;
+        if (cs.state === 'IDLE') {
+          cs.statusText = `ממתין לנסיעה • נהג פעיל: ${driverName}`;
+        }
+        cs.updatedAt = new Date().toISOString();
         break;
       }
 

@@ -320,6 +320,7 @@ const DEFAULT_SETTINGS = {
   emergencyContactPhone: '',
   familyPin: '1234',
   savedVolumePct: 25,
+  localUpdatedAt: '',
   children: [
     { id: 'c1', name: 'נועה', seat: 'אחורי ימין', aboard: true },
     { id: 'c2', name: 'אורי', seat: 'אחורי שמאל', aboard: false }
@@ -342,6 +343,8 @@ const appState = {
   audioReady: false,
   voiceAudio: null,
   voiceObjectUrl: null,
+  decodedVoiceBuffers: {},
+  activeVoiceSource: null,
   sirenInterval: null,
   speechInterval: null,
   vibrateInterval: null,
@@ -404,6 +407,11 @@ function saveSettings() {
   } catch {
     // Ignore
   }
+}
+
+function stampLocalUpdate() {
+  appState.settings.localUpdatedAt = new Date().toISOString();
+  saveSettings();
 }
 
 function loadHistory() {
@@ -612,22 +620,64 @@ function buildSeedCoupleState() {
   };
 }
 
+function isDefaultColdSeed(data) {
+  if (!data || !Array.isArray(data.savedPlaces) || data.savedPlaces.length !== 3) return false;
+  const sig = data.savedPlaces.map((p) => `${p.id}:${p.name}:${p.address}`).join('|');
+  const defaultSig = 'home:הבית:תל אביב|daycare:הגן של נועה:תל אביב|work:מקום העבודה:תל אביב';
+  return (
+    sig === defaultSig &&
+    data.profiles?.myName === 'אלון' &&
+    data.profiles?.partnerName === 'דנה' &&
+    data.profiles?.guestName === 'סבא/סבתא' &&
+    (!data.history || data.history.length === 0)
+  );
+}
+
 function applyRemoteState(data) {
   if (!data || typeof data !== 'object') return;
-  appState.coupleState = data;
-  if (data.profiles && (data.profiles.myName !== 'אלון' || data.profiles.partnerName !== 'דנה' || data.profiles.guestName !== 'סבא/סבתא')) {
+  const remoteUpdatedMs = Date.parse(data?.coupleStatus?.updatedAt || '') || 0;
+  const localUpdatedMs = Date.parse(appState.settings.localUpdatedAt || '') || 0;
+  const isCold = isDefaultColdSeed(data);
+  const remoteIsStale = (localUpdatedMs > 0 && remoteUpdatedMs > 0 && remoteUpdatedMs + 500 < localUpdatedMs) || (localUpdatedMs > 0 && isCold);
+
+  appState.coupleState = {
+    ...data,
+    ...(remoteIsStale
+      ? {
+          profiles: {
+            myName: appState.settings.myName || 'אלון',
+            partnerName: appState.settings.partnerName || 'דנה',
+            guestName: appState.settings.guestName || 'סבא/סבתא'
+          },
+          savedPlaces: appState.settings.savedPlaces
+        }
+      : {})
+  };
+
+  if (
+    !remoteIsStale &&
+    data.profiles &&
+    (!isCold && (data.profiles.myName !== 'אלון' || data.profiles.partnerName !== 'דנה' || data.profiles.guestName !== 'סבא/סבתא' || remoteUpdatedMs > localUpdatedMs))
+  ) {
     const namesBox = document.getElementById('couple-names-box');
     if (!namesBox || !namesBox.contains(document.activeElement)) {
+      const prevPartner = appState.settings.partnerName || 'דנה';
       appState.settings.myName = data.profiles.myName || appState.settings.myName;
       appState.settings.partnerName = data.profiles.partnerName || appState.settings.partnerName;
       appState.settings.guestName = data.profiles.guestName || appState.settings.guestName;
+      if (!appState.settings.emergencyContactName || appState.settings.emergencyContactName === 'דנה' || appState.settings.emergencyContactName === prevPartner) {
+        appState.settings.emergencyContactName = appState.settings.partnerName;
+      }
       saveSettings();
       renderSettingsControls();
     }
   }
-  if (Array.isArray(data.savedPlaces) && data.savedPlaces.length > 0) {
-    appState.settings.savedPlaces = data.savedPlaces;
-    saveSettings();
+  if (!remoteIsStale && Array.isArray(data.savedPlaces)) {
+    const placesCard = document.getElementById('places-card');
+    if (!placesCard || !placesCard.contains(document.activeElement)) {
+      appState.settings.savedPlaces = data.savedPlaces;
+      saveSettings();
+    }
   }
   if (Array.isArray(data.history) && data.history.length > 0) {
     appState.history = data.history;
@@ -876,20 +926,26 @@ function showDemoFeedback(htmlText, tone = 'info') {
 // ============================================================================
 // Audio, Speech, Vibration & Weather Helpers
 // ============================================================================
+function ensureAudioContext() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!appState.audioCtx) appState.audioCtx = new AudioCtx();
+  if (appState.audioCtx.state === 'suspended') appState.audioCtx.resume().catch(() => {});
+  return appState.audioCtx;
+}
+
 function unlockAudio() {
   try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    if (!appState.audioCtx) appState.audioCtx = new AudioCtx();
-    if (appState.audioCtx.state === 'suspended') appState.audioCtx.resume().catch(() => {});
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
 
-    const osc = appState.audioCtx.createOscillator();
-    const gain = appState.audioCtx.createGain();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
     gain.gain.value = 0.0001;
     osc.connect(gain);
-    gain.connect(appState.audioCtx.destination);
+    gain.connect(ctx.destination);
     osc.start();
-    osc.stop(appState.audioCtx.currentTime + 0.02);
+    osc.stop(ctx.currentTime + 0.02);
 
     appState.audioReady = true;
     els.audioBadge.dataset.ready = 'true';
@@ -902,11 +958,8 @@ function unlockAudio() {
 function playSirenBurst() {
   if (!appState.settings.voiceAlert) return;
   try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    if (!appState.audioCtx) appState.audioCtx = new AudioCtx();
-    if (appState.audioCtx.state === 'suspended') appState.audioCtx.resume().catch(() => {});
-    const ctx = appState.audioCtx;
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
     const freqs = [960, 1340, 960, 1340];
     freqs.forEach((freq, idx) => {
@@ -936,6 +989,14 @@ const GEMINI_AUDIO_TRACKS = {
 };
 
 function stopVoicePlayback() {
+  if (appState.activeVoiceSource) {
+    try {
+      appState.activeVoiceSource.stop();
+    } catch {
+      // Ignore already ended source
+    }
+    appState.activeVoiceSource = null;
+  }
   if (appState.voiceAudio) {
     try {
       appState.voiceAudio.pause();
@@ -951,21 +1012,38 @@ function stopVoicePlayback() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
 }
 
+function playAudioBufferWithWebAudio(audioBuffer) {
+  const ctx = ensureAudioContext();
+  if (!ctx || !audioBuffer) return false;
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(ctx.destination);
+  source.onended = () => {
+    if (appState.activeVoiceSource === source) {
+      appState.activeVoiceSource = null;
+    }
+  };
+  appState.activeVoiceSource = source;
+  source.start(0);
+  return true;
+}
+
 function playFallbackSpeechSynthesis(msg) {
-  if (!('speechSynthesis' in window)) return;
+  if (!('speechSynthesis' in window)) return false;
   try {
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(msg);
     utter.lang = 'he-IL';
     utter.rate = 1.02;
     window.speechSynthesis.speak(utter);
+    return true;
   } catch {
-    // Ignore
+    return false;
   }
 }
 
-async function playGeminiFemaleAlert(kind = null, customText = null) {
-  if (!appState.settings.voiceAlert) return;
+async function playGeminiFemaleAlert(kind = null, customText = null, forcePlay = false) {
+  if (!forcePlay && !appState.settings.voiceAlert) return null;
 
   const resolvedKind =
     kind ||
@@ -987,8 +1065,9 @@ async function playGeminiFemaleAlert(kind = null, customText = null) {
 
   stopVoicePlayback();
 
+  const ctx = ensureAudioContext();
   const selectedVoice = appState.settings.ttsVoice || 'Aoede';
-  let audioSrc = staticUrl;
+  let htmlFallbackSrc = staticUrl;
 
   if ((selectedVoice !== 'Aoede' || customText) && navigator.onLine) {
     try {
@@ -1003,13 +1082,40 @@ async function playGeminiFemaleAlert(kind = null, customText = null) {
           const bin = atob(data.audioBase64);
           const bytes = new Uint8Array(bin.length);
           for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          if (ctx) {
+            try {
+              const decoded = await ctx.decodeAudioData(bytes.buffer.slice(0));
+              if (playAudioBufferWithWebAudio(decoded)) return 'web-audio-tts';
+            } catch {
+              // Fall back to Blob <audio> playback
+            }
+          }
           const blob = new Blob([bytes], { type: data.mimeType || 'audio/wav' });
           appState.voiceObjectUrl = URL.createObjectURL(blob);
-          audioSrc = appState.voiceObjectUrl;
+          htmlFallbackSrc = appState.voiceObjectUrl;
         }
       }
     } catch {
       // Fall back to pre-generated Gemini TTS MP3 file
+    }
+  }
+
+  if (ctx) {
+    try {
+      let decoded = appState.decodedVoiceBuffers[resolvedKind];
+      if (!decoded) {
+        const res = await fetch(staticUrl, { cache: 'no-store' });
+        if (res.ok) {
+          const arrayBuf = await res.arrayBuffer();
+          decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
+          appState.decodedVoiceBuffers[resolvedKind] = decoded;
+        }
+      }
+      if (decoded && playAudioBufferWithWebAudio(decoded)) {
+        return 'web-audio-static';
+      }
+    } catch {
+      // Fall back to HTML5 <audio>
     }
   }
 
@@ -1018,10 +1124,11 @@ async function playGeminiFemaleAlert(kind = null, customText = null) {
       appState.voiceAudio = new Audio();
       appState.voiceAudio.preload = 'auto';
     }
-    appState.voiceAudio.src = audioSrc;
+    appState.voiceAudio.src = htmlFallbackSrc;
     await appState.voiceAudio.play();
+    return 'html-audio';
   } catch {
-    playFallbackSpeechSynthesis(fallbackText);
+    return playFallbackSpeechSynthesis(fallbackText) ? 'speech-synthesis' : null;
   }
 }
 
@@ -1092,17 +1199,32 @@ function stopAlarmOutputs() {
 async function fetchAmbientTemp(lat, lon) {
   try {
     const res = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`
+      `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&current=temperature_2m&current_weather=true`,
+      { cache: 'no-store' }
     );
-    if (!res.ok) return;
+    if (!res.ok) return null;
     const json = await res.json();
-    const temp = json?.current_weather?.temperature;
-    if (typeof temp === 'number') {
-      updateTemperatureBadge(Math.round(temp));
+    const temp = json?.current?.temperature_2m ?? json?.current_weather?.temperature;
+    if (typeof temp === 'number' && Number.isFinite(temp)) {
+      const rounded = Math.round(temp);
+      updateTemperatureBadge(rounded);
+      return rounded;
     }
   } catch {
     // Offline or blocked
   }
+  return null;
+}
+
+async function refreshLiveTemperature() {
+  const firstPlace = Array.isArray(appState.settings.savedPlaces) ? appState.settings.savedPlaces[0] : null;
+  const lat = appState.lastFix?.lat ?? firstPlace?.lat ?? 32.0853;
+  const lon = appState.lastFix?.lon ?? firstPlace?.lon ?? 34.7818;
+  const temp = await fetchAmbientTemp(lat, lon);
+  if (temp === null && appState.ambientTempC === null && els.tempBadge) {
+    els.tempBadge.textContent = '🌡️ לא זמין';
+  }
+  return temp;
 }
 
 function updateTemperatureBadge(tempC) {
@@ -1182,8 +1304,8 @@ function setStatus(newStatus, customDesc) {
   els.statusPill.dataset.state = newStatus;
 
   const labels = {
-    IDLE: 'מוכן לניטור נסיעה',
-    MONITORING: 'ניטור GPS פעיל – ממתין לתנועה',
+    IDLE: 'ניטור מושהה (ממתין להפעלה)',
+    MONITORING: '🟢 ניטור אוטומטי פעיל – ממתין לתנועה',
     DRIVING: 'נסיעה ברכב זוהתה!',
     STOPPING: 'עצירה זוהתה – סופר לסיום נסיעה',
     REFUEL_PAUSE: '⛽ בהשהיית תדלוק (הילד ברכב)',
@@ -1193,8 +1315,8 @@ function setStatus(newStatus, customDesc) {
   els.statusLabel.textContent = labels[newStatus] || newStatus;
 
   const descriptions = {
-    IDLE: 'המערכת מוכנה. באייפון היא מופעלת ברקע עם מסך כבוי דרך קיצורי הדרך, וכאן ניתן גם להפעיל סימולציה או מעבדת דמו.',
-    MONITORING: `עוקב אחרי תנועת הרכב. מעל ${appState.settings.speedThresholdKmh} קמ"ש תתחיל נסיעה (נסיעות קצרות מ-2 דק' ו-150 מ' מסוננות בשקט).`,
+    IDLE: 'הניטור האוטומטי מושהה כרגע. לחץ להפעלה מחדש או הפעל דרך קיצורי הדרך / מעבדת הדמו.',
+    MONITORING: `המערכת מנטרת אוטומטית מרגע הפתיחה! מעל ${appState.settings.speedThresholdKmh} קמ"ש תתחיל נסיעה (נסיעות קצרות מ-2 דק' ו-150 מ' מסוננות בשקט). באייפון פועל גם דרך CarPlay/Bluetooth.`,
     DRIVING: 'נסיעה פעילה. אם תבחר לתדלק או להוריד בגן, תוכל לסמן זאת בסיום.',
     STOPPING: `הרכב עצר! ממתין ${appState.stopSecondsLeft} שנ' (כדי לא להציק בעצירות קצרות).`,
     REFUEL_PAUSE: 'השהיית תדלוק פעילה. אם לא תחזור לנסוע תוך 3 דקות, ההתרעה תופעל שוב אוטומטית.',
@@ -1205,7 +1327,9 @@ function setStatus(newStatus, customDesc) {
 
   const isMonitoring = ['MONITORING', 'DRIVING', 'STOPPING'].includes(newStatus);
   els.toggleMonitorBtn.classList.toggle('is-active', isMonitoring);
-  els.toggleMonitorBtn.textContent = isMonitoring ? 'עצור ניטור GPS' : 'התחל ניטור נסיעה (GPS)';
+  els.toggleMonitorBtn.textContent = isMonitoring
+    ? '🟢 ניטור אוטומטי פעיל (לחץ להשהיה)'
+    : 'הפעל ניטור נסיעה אוטומטי (GPS)';
 }
 
 function updateSpeedTelemetry(speedKmh, accuracyMeters = null) {
@@ -1303,14 +1427,15 @@ function clearRefuelTimer() {
   appState.refuelSecondsLeft = 0;
 }
 
-function startMonitoring(startAsDriving = false) {
+function startMonitoring(startAsDriving = false, silentAuto = false) {
   clearSimulation();
   clearRefuelTimer();
-  unlockAudio();
-  requestWakeLock();
-
-  if ('Notification' in window && Notification.permission === 'default') {
-    Notification.requestPermission().catch(() => {});
+  if (!silentAuto) {
+    unlockAudio();
+    requestWakeLock();
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
   }
 
   appState.maxSpeedKmh = 0;
@@ -1326,7 +1451,7 @@ function startMonitoring(startAsDriving = false) {
   if (!('geolocation' in navigator)) {
     setStatus(
       startAsDriving ? 'DRIVING' : 'MONITORING',
-      'שירותי מיקום לא זמינים בדפדפן. השתמש במעבדת הדמו או בקיצורי אייפון.'
+      'הניטור האוטומטי פעיל (ללא חיישן GPS בדפדפן זה – השתמש בקיצורי אייפון או במעבדת הדמו).'
     );
     return;
   }
@@ -1357,13 +1482,13 @@ function startMonitoring(startAsDriving = false) {
       handleSpeedSample(kmh, fix.accuracy);
     },
     (err) => {
-      els.gpsAccuracyValue.textContent = 'חסום/שגיאה';
-      els.stateDescription.textContent =
-        err.code === 1
-          ? 'הרשאת המיקום נדחתה (או שהעמוד ב-HTTP). השתמש במעבדת הדמו לבדיקה מיידית.'
-          : 'ממתין לאות GPS...';
+      els.gpsAccuracyValue.textContent = err.code === 1 ? 'דרושה הרשאת GPS' : 'ממתין לאות GPS';
+      if (err.code === 1) {
+        els.stateDescription.textContent =
+          'הניטור האוטומטי פעיל וממתין להרשאת GPS מהדפדפן (ב-HTTPS), ובאייפון פועל גם דרך קיצורי הדרך ביציאה מהרכב.';
+      }
     },
-    { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 12000 }
   );
 }
 
@@ -2150,35 +2275,51 @@ async function runSelfCheck() {
 // ============================================================================
 // UI Rendering
 // ============================================================================
+function formatAssigneeLabel(assignee) {
+  const myName = appState.settings.myName || 'אלון';
+  const partnerName = appState.settings.partnerName || 'דנה';
+  const guestName = appState.settings.guestName || 'סבא/סבתא';
+  if (assignee === 'בת הזוג' || assignee === 'partner') return `בת הזוג (${partnerName})`;
+  if (assignee === 'סבא/סבתא' || assignee === 'guest') return guestName;
+  return `אני (${myName})`;
+}
+
 function renderCoupleCard() {
   const cs = appState.coupleState?.coupleStatus;
   if (!cs) {
-    els.coupleStatusText.textContent = 'מצב מקומי (ממתין לסנכרון שרת)';
-    return;
-  }
-  els.coupleLiveStatus.dataset.state = cs.state || 'IDLE';
-  els.coupleStatusText.textContent = cs.statusText || 'מוכן לנסיעה';
-
-  const now = Date.now();
-  const soloActive = cs.soloContinueUntil > now;
-  const snoozeActive = cs.snoozeUntil > now;
-
-  if (snoozeActive || soloActive) {
-    els.coupleProtectionBanner.hidden = false;
-    const minsLeft = Math.max(1, Math.ceil(((snoozeActive ? cs.snoozeUntil : cs.soloContinueUntil) - now) / 60000));
-    els.coupleProtectionText.textContent = snoozeActive
-      ? `🔧 מצב מוסך/שטיפה פעיל – יחזור אוטומטית בעוד ${minsLeft} דק'`
-      : `🚗 מצב נסיעה לבד / המשך מהגן פעיל (${minsLeft} דק' נותרו) – התראות מושתקות`;
-    els.btnGarageMode.classList.toggle('is-on', snoozeActive);
-    els.btnSoloNow.classList.toggle('is-on', soloActive);
-  } else {
+    els.coupleLiveStatus.dataset.state = 'IDLE';
+    els.coupleStatusText.textContent = `מוכן לנסיעה • נהג פעיל: ${getCurrentDriverName()}`;
     els.coupleProtectionBanner.hidden = true;
     els.btnGarageMode.classList.remove('is-on');
     els.btnSoloNow.classList.remove('is-on');
+  } else {
+    els.coupleLiveStatus.dataset.state = cs.state || 'IDLE';
+    els.coupleStatusText.textContent =
+      cs.state === 'IDLE' || !cs.statusText
+        ? `ממתין לנסיעה • נהג פעיל: ${getCurrentDriverName()}`
+        : cs.statusText;
+
+    const now = Date.now();
+    const soloActive = cs.soloContinueUntil > now;
+    const snoozeActive = cs.snoozeUntil > now;
+
+    if (snoozeActive || soloActive) {
+      els.coupleProtectionBanner.hidden = false;
+      const minsLeft = Math.max(1, Math.ceil(((snoozeActive ? cs.snoozeUntil : cs.soloContinueUntil) - now) / 60000));
+      els.coupleProtectionText.textContent = snoozeActive
+        ? `🔧 מצב מוסך/שטיפה פעיל – יחזור אוטומטית בעוד ${minsLeft} דק'`
+        : `🚗 מצב נסיעה לבד / המשך מהגן פעיל (${minsLeft} דק' נותרו) – התראות מושתקות`;
+      els.btnGarageMode.classList.toggle('is-on', snoozeActive);
+      els.btnSoloNow.classList.toggle('is-on', soloActive);
+    } else {
+      els.coupleProtectionBanner.hidden = true;
+      els.btnGarageMode.classList.remove('is-on');
+      els.btnSoloNow.classList.remove('is-on');
+    }
   }
 
   const pickup = appState.coupleState?.pickupToday?.assignee || 'אני';
-  els.pickupStatusBadge.textContent = `באחריות: ${pickup}`;
+  els.pickupStatusBadge.textContent = `באחריות: ${formatAssigneeLabel(pickup)}`;
   for (const btn of els.pickupSyncBar.querySelectorAll('.pickup-btn')) {
     btn.setAttribute('aria-pressed', String(btn.dataset.assignee === pickup));
   }
@@ -2187,23 +2328,66 @@ function renderCoupleCard() {
 async function geocodeAddress(addressQuery) {
   const q = (addressQuery || '').trim();
   if (!q) return null;
-  try {
+
+  const queryNominatim = async (useIsraelBias) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
+    const timer = setTimeout(() => controller.abort(), 7000);
+    try {
+      const bias = useIsraelBias ? '&countrycodes=il' : '';
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&limit=3&accept-language=he&addressdetails=1${bias}&q=${encodeURIComponent(q)}`,
+        { signal: controller.signal }
+      );
+      if (!res.ok) return [];
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let rows = await queryNominatim(true);
+  if (!rows.length) {
+    rows = await queryNominatim(false);
+  }
+  if (!rows.length) return null;
+
+  const best =
+    rows.find((r) => r.address?.house_number && r.address?.road) ||
+    rows.find((r) => r.address?.road) ||
+    rows[0];
+  const lat = Number(best.lat);
+  const lon = Number(best.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+
+  const addr = best.address || {};
+  const streetPart = [addr.road, addr.house_number].filter(Boolean).join(' ');
+  const cityPart = addr.city || addr.town || addr.village || addr.municipality || '';
+  const shortName = [streetPart, cityPart].filter(Boolean).join(', ');
+  return { lat, lon, displayName: shortName || best.display_name || q };
+}
+
+async function reverseGeocode(lat, lon) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=he&q=${encodeURIComponent(q)}`,
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&accept-language=he&addressdetails=1`,
       { signal: controller.signal }
     );
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const rows = await res.json();
-    if (!Array.isArray(rows) || !rows.length) return null;
-    const lat = Number(rows[0].lat);
-    const lon = Number(rows[0].lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-    return { lat, lon, displayName: rows[0].display_name || q };
+    if (!res.ok) return '';
+    const data = await res.json();
+    const addr = data?.address || {};
+    const streetPart = [addr.road, addr.house_number].filter(Boolean).join(' ');
+    const cityPart = addr.city || addr.town || addr.village || addr.suburb || '';
+    const combined = [streetPart, cityPart].filter(Boolean).join(', ');
+    return combined || data?.display_name || '';
   } catch {
-    return null;
+    return '';
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -2216,8 +2400,18 @@ function renderPlaces(force = false) {
   if (!force && els.placesList.contains(document.activeElement)) {
     return;
   }
-  const places = appState.coupleState?.savedPlaces || appState.settings.savedPlaces || DEFAULT_SETTINGS.savedPlaces;
+  const places = Array.isArray(appState.settings.savedPlaces)
+    ? appState.settings.savedPlaces
+    : DEFAULT_SETTINGS.savedPlaces;
   els.placesList.innerHTML = '';
+
+  if (!places.length) {
+    const empty = document.createElement('li');
+    empty.className = 'history-empty';
+    empty.textContent = 'אין מקומות שמורים כרגע. ניתן להוסיף מקום חדש בטופס למעלה.';
+    els.placesList.appendChild(empty);
+    return;
+  }
 
   for (const p of places) {
     const li = document.createElement('li');
@@ -2266,14 +2460,16 @@ function renderPlaces(force = false) {
       let newLon = p.lon;
       let geoNote = '';
 
-      if (newAddr && newAddr !== (p.address || '').trim()) {
+      if (newAddr) {
         saveBtn.textContent = 'מחפש...';
+        saveBtn.disabled = true;
         const geo = await geocodeAddress(newAddr);
+        saveBtn.disabled = false;
         saveBtn.textContent = '🔍 חפש כתובת ושמור';
         if (geo) {
           newLat = geo.lat;
           newLon = geo.lon;
-          geoNote = ` (אותר GPS: ${newLat.toFixed(4)}, ${newLon.toFixed(4)})`;
+          geoNote = ` (אותר GPS מדויק: ${newLat.toFixed(4)}, ${newLon.toFixed(4)}${geo.displayName ? ` • ${geo.displayName}` : ''})`;
         } else {
           geoNote = ' (נשמרה הכתובת; לא נמצא דיוק אוטומטי במפה)';
         }
@@ -2284,7 +2480,8 @@ function renderPlaces(force = false) {
       p.lat = newLat;
       p.lon = newLon;
       appState.settings.savedPlaces = places;
-      saveSettings();
+      if (appState.coupleState) appState.coupleState.savedPlaces = places;
+      stampLocalUpdate();
 
       await apiPostEvent('UPDATE_PLACE', {
         placeId: p.id,
@@ -2302,44 +2499,81 @@ function renderPlaces(force = false) {
     gpsBtn.className = 'btn-secondary btn-sm place-gps-btn';
     gpsBtn.textContent = '📍 מיקום נוכחי';
     gpsBtn.addEventListener('click', async () => {
-      const saveCoords = async (lat, lon) => {
+      const applyGpsFix = async (lat, lon, accuracy = null) => {
+        gpsBtn.textContent = 'מאכן כתובת...';
+        const resolvedAddress = await reverseGeocode(lat, lon);
+        gpsBtn.disabled = false;
+        gpsBtn.textContent = '📍 מיקום נוכחי';
+
         p.lat = lat;
         p.lon = lon;
+        p.name = nameInput.value.trim() || p.name;
+        if (resolvedAddress) {
+          p.address = resolvedAddress;
+          addrInput.value = resolvedAddress;
+        } else {
+          p.address = addrInput.value.trim();
+        }
         appState.settings.savedPlaces = places;
-        saveSettings();
-        await apiPostEvent('UPDATE_PLACE', { placeId: p.id, name: nameInput.value.trim() || p.name, address: addrInput.value.trim(), lat, lon });
+        if (appState.coupleState) appState.coupleState.savedPlaces = places;
+        stampLocalUpdate();
+
+        await apiPostEvent('UPDATE_PLACE', {
+          placeId: p.id,
+          name: p.name,
+          address: p.address,
+          lat,
+          lon
+        });
         renderPlaces(true);
-        showPlacesFeedback(`📍 המיקום של "${p.name}" עודכן לנקודת ה-GPS הנוכחית!`);
+        const accNote =
+          typeof accuracy === 'number' && Number.isFinite(accuracy)
+            ? ` (דיוק GPS: ±${Math.round(accuracy)} מ'${accuracy > 120 ? ' — דיוק רשת משוער' : ''})`
+            : '';
+        showPlacesFeedback(
+          `📍 המיקום של "${p.name}" עודכן לנקודה הנוכחית${p.address ? `: ${p.address}` : ''}${accNote}`
+        );
       };
 
-      if (appState.lastFix) {
-        await saveCoords(appState.lastFix.lat, appState.lastFix.lon);
-      } else if ('geolocation' in navigator) {
+      if ('geolocation' in navigator) {
+        gpsBtn.disabled = true;
+        gpsBtn.textContent = 'מאתר GPS...';
         navigator.geolocation.getCurrentPosition(
-          (pos) => saveCoords(pos.coords.latitude, pos.coords.longitude),
-          () => showPlacesFeedback('⚠️ לא ניתן למשוך מיקום GPS כרגע – הזן כתובת ולחץ "חפש כתובת ושמור".')
+          (pos) => applyGpsFix(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
+          () => {
+            if (appState.lastFix) {
+              applyGpsFix(appState.lastFix.lat, appState.lastFix.lon, appState.lastFix.accuracy);
+            } else {
+              gpsBtn.disabled = false;
+              gpsBtn.textContent = '📍 מיקום נוכחי';
+              showPlacesFeedback('⚠️ לא ניתן למשוך מיקום GPS מדויק כרגע – הזן כתובת ולחץ "חפש כתובת ושמור".');
+            }
+          },
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
         );
+      } else if (appState.lastFix) {
+        await applyGpsFix(appState.lastFix.lat, appState.lastFix.lon, appState.lastFix.accuracy);
       } else {
         showPlacesFeedback('⚠️ GPS לא זמין בדפדפן – הזן כתובת ולחץ "חפש כתובת ושמור".');
       }
     });
 
-    btnsGroup.append(saveBtn, gpsBtn);
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'remove-btn place-delete-btn';
+    delBtn.textContent = '🗑️ מחק';
+    delBtn.setAttribute('aria-label', `מחק את ${p.name}`);
+    delBtn.addEventListener('click', async () => {
+      const nextPlaces = places.filter((item) => item.id !== p.id);
+      appState.settings.savedPlaces = nextPlaces;
+      if (appState.coupleState) appState.coupleState.savedPlaces = nextPlaces;
+      stampLocalUpdate();
+      await apiPostEvent('DELETE_PLACE', { placeId: p.id });
+      renderPlaces(true);
+      showPlacesFeedback(`🗑️ המקום "${p.name}" נמחק.`);
+    });
 
-    if (!['home', 'daycare', 'work'].includes(p.id)) {
-      const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'remove-btn place-delete-btn';
-      delBtn.textContent = 'הסר';
-      delBtn.addEventListener('click', async () => {
-        appState.settings.savedPlaces = places.filter((item) => item.id !== p.id);
-        saveSettings();
-        await apiPostEvent('DELETE_PLACE', { placeId: p.id });
-        renderPlaces(true);
-        showPlacesFeedback(`🗑️ המקום "${p.name}" הוסר.`);
-      });
-      btnsGroup.appendChild(delBtn);
-    }
+    btnsGroup.append(saveBtn, gpsBtn, delBtn);
 
     actionsRow.append(coordsEl, btnsGroup);
     li.append(inputsRow, actionsRow);
@@ -2434,6 +2668,12 @@ function syncNamesToUI() {
   if (btnMe) btnMe.textContent = `אני (${myName})`;
   if (btnPartner) btnPartner.textContent = `בת הזוג (${partnerName})`;
   if (btnGuest) btnGuest.textContent = guestName;
+
+  if (els.contactNameInput && document.activeElement !== els.contactNameInput) {
+    els.contactNameInput.value = appState.settings.emergencyContactName || partnerName;
+  }
+
+  renderCoupleCard();
 }
 
 function renderVerificationModes() {
@@ -2558,23 +2798,39 @@ function bindEvents() {
   els.roleSelect.addEventListener('change', () => {
     appState.settings.driverRoleKey = els.roleSelect.value;
     saveSettings();
+    renderCoupleCard();
   });
 
+  const syncLiveProfilesState = (myName, partnerName, guestName, prevPartner) => {
+    if (!appState.settings.emergencyContactName || appState.settings.emergencyContactName === 'דנה' || appState.settings.emergencyContactName === prevPartner) {
+      appState.settings.emergencyContactName = partnerName;
+      els.contactNameInput.value = partnerName;
+    }
+    if (appState.coupleState) {
+      appState.coupleState.profiles = { myName, partnerName, guestName };
+      if (appState.coupleState.coupleStatus) {
+        appState.coupleState.coupleStatus.driverName = getCurrentDriverName();
+        if (appState.coupleState.coupleStatus.state === 'IDLE') {
+          appState.coupleState.coupleStatus.statusText = `ממתין לנסיעה • נהג פעיל: ${getCurrentDriverName()}`;
+        }
+      }
+    }
+  };
+
   const applyCoupleNames = async (syncServer = true) => {
+    const prevPartner = appState.settings.partnerName || 'דנה';
     const myName = els.myNameInput.value.trim() || 'אלון';
     const partnerName = els.partnerNameInput.value.trim() || 'דנה';
     const guestName = els.guestNameInput.value.trim() || 'סבא/סבתא';
     appState.settings.myName = myName;
     appState.settings.partnerName = partnerName;
     appState.settings.guestName = guestName;
-    if (!appState.settings.emergencyContactName || appState.settings.emergencyContactName === 'דנה') {
-      appState.settings.emergencyContactName = partnerName;
-      els.contactNameInput.value = partnerName;
-    }
-    saveSettings();
+    syncLiveProfilesState(myName, partnerName, guestName, prevPartner);
+    stampLocalUpdate();
     syncNamesToUI();
     if (syncServer) {
       await apiPostEvent('UPDATE_PROFILES', { myName, partnerName, guestName });
+      syncNamesToUI();
       els.namesSavedFeedback.textContent = 'השמות נשמרו וסונכרנו ✓';
       setTimeout(() => {
         els.namesSavedFeedback.textContent = '';
@@ -2585,53 +2841,84 @@ function bindEvents() {
   els.saveNamesBtn.addEventListener('click', () => applyCoupleNames(true));
   for (const inp of [els.myNameInput, els.partnerNameInput, els.guestNameInput]) {
     inp.addEventListener('input', () => {
-      appState.settings.myName = els.myNameInput.value.trim() || 'אלון';
-      appState.settings.partnerName = els.partnerNameInput.value.trim() || 'דנה';
-      appState.settings.guestName = els.guestNameInput.value.trim() || 'סבא/סבתא';
-      saveSettings();
+      const prevPartner = appState.settings.partnerName || 'דנה';
+      const myName = els.myNameInput.value.trim() || 'אלון';
+      const partnerName = els.partnerNameInput.value.trim() || 'דנה';
+      const guestName = els.guestNameInput.value.trim() || 'סבא/סבתא';
+      appState.settings.myName = myName;
+      appState.settings.partnerName = partnerName;
+      appState.settings.guestName = guestName;
+      syncLiveProfilesState(myName, partnerName, guestName, prevPartner);
+      stampLocalUpdate();
       syncNamesToUI();
     });
   }
 
   els.addPlaceForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const icon = els.newPlaceIcon.value.trim() || '📍';
+    const rawTypeVal = (els.newPlaceIcon.value || '📍').trim();
+    const [iconPart, roleIdPart] = rawTypeVal.split('|');
+    const icon = iconPart || '📍';
     const name = els.newPlaceName.value.trim();
     const address = els.newPlaceAddress.value.trim();
     if (!name) return;
 
+    const submitBtn = els.addPlaceForm.querySelector('button[type="submit"]');
     let lat = appState.lastFix?.lat || 32.0853;
     let lon = appState.lastFix?.lon || 34.7818;
     let geoNote = '';
     if (address) {
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'מאתר כתובת...';
+      }
       const geo = await geocodeAddress(address);
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'הוסף מקום';
+      }
       if (geo) {
         lat = geo.lat;
         lon = geo.lon;
-        geoNote = ` (אותר GPS: ${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+        geoNote = ` (אותר GPS: ${lat.toFixed(4)}, ${lon.toFixed(4)}${geo.displayName ? ` • ${geo.displayName}` : ''})`;
       }
     }
 
-    const newPlace = { id: 'p_' + Date.now(), icon, name, address, lat, lon, radiusM: 150 };
-    const list = appState.coupleState?.savedPlaces || appState.settings.savedPlaces || [];
+    const list = Array.isArray(appState.settings.savedPlaces) ? [...appState.settings.savedPlaces] : [];
+    const requestedId =
+      roleIdPart && ['home', 'daycare', 'work'].includes(roleIdPart) && !list.some((x) => x.id === roleIdPart)
+        ? roleIdPart
+        : '';
+    const newPlace = {
+      id: requestedId || 'p_' + Date.now(),
+      icon,
+      name,
+      address,
+      lat,
+      lon,
+      radiusM: 150
+    };
     list.push(newPlace);
     appState.settings.savedPlaces = list;
-    saveSettings();
+    if (appState.coupleState) appState.coupleState.savedPlaces = list;
+    stampLocalUpdate();
 
+    els.newPlaceIcon.selectedIndex = 0;
     els.newPlaceName.value = '';
     els.newPlaceAddress.value = '';
-    await apiPostEvent('ADD_PLACE', { icon, name, address, lat, lon });
+    await apiPostEvent('ADD_PLACE', { placeId: requestedId || undefined, icon, name, address, lat, lon });
     renderPlaces(true);
     showPlacesFeedback(`✅ נוסף מקום חדש: "${name}" — ${address}${geoNote}`);
   });
 
   els.shareGuestBtn.addEventListener('click', async () => {
     const guestUrl = `${window.location.origin}${window.location.pathname}?role=guest`;
+    const guestLabel = appState.settings.guestName || 'סבא/סבתא';
     if (navigator.share) {
-      navigator.share({ title: 'שומר הילדים – קישור נהג אורח', url: guestUrl }).catch(() => {});
+      navigator.share({ title: `שומר הילדים – קישור נהג אורח (${guestLabel})`, url: guestUrl }).catch(() => {});
     } else if (navigator.clipboard) {
       await navigator.clipboard.writeText(guestUrl).catch(() => {});
-      showDemoFeedback(`<strong>👴 קישור לנהג אורח (סבא/סבתא) הועתק:</strong> <code>${guestUrl}</code>`, 'info');
+      showDemoFeedback(`<strong>👴 קישור לנהג אורח (${guestLabel}) הועתק:</strong> <code>${guestUrl}</code>`, 'info');
     }
   });
 
@@ -2707,6 +2994,9 @@ function bindEvents() {
   els.settingAutoDetect.addEventListener('change', () => {
     appState.settings.autoDetect = els.settingAutoDetect.checked;
     saveSettings();
+    if (appState.settings.autoDetect && appState.status === 'IDLE') {
+      startMonitoring(false, false);
+    }
   });
   els.settingMicrotripFilter.addEventListener('change', () => {
     appState.settings.microTripFilter = els.settingMicrotripFilter.checked;
@@ -2735,13 +3025,31 @@ function bindEvents() {
   });
   els.testVoiceBtn.addEventListener('click', async () => {
     unlockAudio();
-    const prevText = els.testVoiceBtn.textContent;
-    els.testVoiceBtn.textContent = '🔊 משמיע קול נשי (Gemini TTS)...';
-    await playGeminiFemaleAlert('stop');
+    const defaultLabel = '🔊 השמע הדגמת קול נשי (Gemini TTS)';
+    els.testVoiceBtn.disabled = true;
+    els.testVoiceBtn.textContent = '🔊 מפעיל קול נשי (Gemini)...';
+    const playedMode = await playGeminiFemaleAlert('stop', null, true);
+    els.testVoiceBtn.disabled = false;
+    els.testVoiceBtn.textContent = playedMode
+      ? '🔊 הקול הנשי מתנגן ✓'
+      : '⚠️ בדוק עוצמת שמע במכשיר';
     setTimeout(() => {
-      els.testVoiceBtn.textContent = prevText;
-    }, 2000);
+      els.testVoiceBtn.textContent = defaultLabel;
+    }, 2800);
   });
+  if (els.tempBadge) {
+    const refreshTempHandler = () => {
+      els.tempBadge.textContent = '🌡️ מעדכן...';
+      refreshLiveTemperature();
+    };
+    els.tempBadge.addEventListener('click', refreshTempHandler);
+    els.tempBadge.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        refreshTempHandler();
+      }
+    });
+  }
   els.settingSpeedThreshold.addEventListener('change', () => {
     appState.settings.speedThresholdKmh = Number(els.settingSpeedThreshold.value);
     saveSettings();
@@ -2894,7 +3202,28 @@ async function init() {
   initDialogs();
   bindEvents();
   registerServiceWorker();
-  setStatus('IDLE');
+
+  const params = new URLSearchParams(window.location.search);
+  const hasDeepLinkDriveAction =
+    params.get('trigger') === 'car_exit' || ['end_drive', 'start_drive'].includes(params.get('action'));
+
+  if (appState.settings.autoDetect && !hasDeepLinkDriveAction) {
+    startMonitoring(false, true);
+  } else {
+    setStatus('IDLE');
+  }
+
+  refreshLiveTemperature();
+  document.addEventListener(
+    'pointerdown',
+    () => {
+      unlockAudio();
+      if (appState.settings.autoDetect && ['MONITORING', 'DRIVING', 'STOPPING'].includes(appState.status)) {
+        requestWakeLock();
+      }
+    },
+    { once: true }
+  );
 
   await apiFetchState();
   initFirebaseSync();
