@@ -299,7 +299,10 @@ const STORAGE_HISTORY_KEY = 'childguard_history_v2';
 const QR_PAYLOAD = 'CHILDGUARD-BACKSEAT-OK';
 
 const DEFAULT_SETTINGS = {
-  driverRole: 'אני (אלון)',
+  driverRoleKey: 'me',
+  myName: 'אלון',
+  partnerName: 'דנה',
+  guestName: 'סבא/סבתא',
   verificationMode: 'onethumb',
   autoDetect: true,
   microTripFilter: true,
@@ -317,6 +320,11 @@ const DEFAULT_SETTINGS = {
   children: [
     { id: 'c1', name: 'נועה', seat: 'אחורי ימין', aboard: true },
     { id: 'c2', name: 'אורי', seat: 'אחורי שמאל', aboard: false }
+  ],
+  savedPlaces: [
+    { id: 'home', icon: '🏠', name: 'הבית', address: 'תל אביב', lat: 32.0853, lon: 34.7818, radiusM: 150 },
+    { id: 'daycare', icon: '🧸', name: 'הגן של נועה', address: 'תל אביב', lat: 32.0912, lon: 34.7865, radiusM: 150 },
+    { id: 'work', icon: '💼', name: 'מקום העבודה', address: 'תל אביב', lat: 32.0731, lon: 34.7922, radiusM: 150 }
   ]
 };
 
@@ -460,7 +468,17 @@ const els = {
 
   // Modes, Places & Settings
   verificationModeGrid: document.getElementById('verification-mode-grid'),
+  addPlaceForm: document.getElementById('add-place-form'),
+  newPlaceIcon: document.getElementById('new-place-icon'),
+  newPlaceName: document.getElementById('new-place-name'),
+  newPlaceAddress: document.getElementById('new-place-address'),
+  placesFeedback: document.getElementById('places-feedback'),
   placesList: document.getElementById('places-list'),
+  myNameInput: document.getElementById('my-name-input'),
+  partnerNameInput: document.getElementById('partner-name-input'),
+  guestNameInput: document.getElementById('guest-name-input'),
+  saveNamesBtn: document.getElementById('save-names-btn'),
+  namesSavedFeedback: document.getElementById('names-saved-feedback'),
   addChildForm: document.getElementById('add-child-form'),
   childNameInput: document.getElementById('child-name-input'),
   childSeatInput: document.getElementById('child-seat-input'),
@@ -542,6 +560,13 @@ const els = {
   guestDriverUrl: document.getElementById('guest-driver-url')
 };
 
+function getCurrentDriverName() {
+  const { driverRoleKey, myName, partnerName, guestName } = appState.settings;
+  if (driverRoleKey === 'partner') return `בת הזוג (${partnerName || 'דנה'})`;
+  if (driverRoleKey === 'guest') return `${guestName || 'סבא/סבתא'} (אורח)`;
+  return `אני (${myName || 'אלון'})`;
+}
+
 // ============================================================================
 // Couple Sync API Client (with Offline Fail-Safe)
 // ============================================================================
@@ -551,6 +576,20 @@ async function apiFetchState() {
     if (!res.ok) return null;
     const data = await res.json();
     appState.coupleState = data;
+    if (data.profiles && (data.profiles.myName !== 'אלון' || data.profiles.partnerName !== 'דנה' || data.profiles.guestName !== 'סבא/סבתא')) {
+      const namesBox = document.getElementById('couple-names-box');
+      if (!namesBox || !namesBox.contains(document.activeElement)) {
+        appState.settings.myName = data.profiles.myName || appState.settings.myName;
+        appState.settings.partnerName = data.profiles.partnerName || appState.settings.partnerName;
+        appState.settings.guestName = data.profiles.guestName || appState.settings.guestName;
+        saveSettings();
+        renderSettingsControls();
+      }
+    }
+    if (Array.isArray(data.savedPlaces) && data.savedPlaces.length > 0) {
+      appState.settings.savedPlaces = data.savedPlaces;
+      saveSettings();
+    }
     if (Array.isArray(data.history) && data.history.length > 0) {
       appState.history = data.history;
       saveHistory();
@@ -574,7 +613,7 @@ async function apiPostEvent(type, payload = {}) {
       },
       body: JSON.stringify({
         type,
-        driverName: appState.settings.driverRole,
+        driverName: getCurrentDriverName(),
         savedVolumePct: appState.settings.savedVolumePct,
         ...payload
       })
@@ -583,6 +622,10 @@ async function apiPostEvent(type, payload = {}) {
     const data = await res.json();
     if (data.state) {
       appState.coupleState = data.state;
+      if (Array.isArray(data.state.savedPlaces)) {
+        appState.settings.savedPlaces = data.state.savedPlaces;
+        saveSettings();
+      }
       if (Array.isArray(data.state.history)) {
         appState.history = data.state.history;
         saveHistory();
@@ -1571,7 +1614,7 @@ function updateEscalationLinks() {
   const locPart = appState.lastFix
     ? `מיקום הרכב: https://maps.google.com/?q=${appState.lastFix.lat},${appState.lastFix.lon}`
     : 'מיקום GPS אינו זמין';
-  const msg = `היי ${name}, הנסיעה של ${appState.settings.driverRole} הסתיימה ועדיין לא סומן אישור בדיקה. מומלץ לבדוק בשיחה. ${locPart}`;
+  const msg = `היי ${name}, הנסיעה של ${getCurrentDriverName()} הסתיימה ועדיין לא סומן אישור בדיקה. מומלץ לבדוק בשיחה. ${locPart}`;
 
   els.callPartnerLink.href = phone ? `tel:${phone}` : '#';
   const waDigits = normalizePhoneForWhatsApp(phone);
@@ -1645,7 +1688,7 @@ async function finalizeOutcome(outcomeType) {
     appState.history.unshift({
       id: String(Date.now()),
       endedAt: new Date().toISOString(),
-      driverName: appState.settings.driverRole,
+      driverName: getCurrentDriverName(),
       method,
       reason: outcomeType === 'DAYCARE_SOLO' ? 'הורדה בגן + המשך לבד לעבודה' : appState.alarmReason,
       maxSpeedKmh: appState.maxSpeedKmh,
@@ -1866,36 +1909,165 @@ function renderCoupleCard() {
   }
 }
 
-function renderPlaces() {
-  const places = appState.coupleState?.savedPlaces || [
-    { id: 'home', icon: '🏠', name: 'הבית', lat: 32.0853, lon: 34.7818 },
-    { id: 'daycare', icon: '🧸', name: 'הגן של נועה', lat: 32.0912, lon: 34.7865 },
-    { id: 'work', icon: '💼', name: 'מקום העבודה', lat: 32.0731, lon: 34.7922 }
-  ];
+async function geocodeAddress(addressQuery) {
+  const q = (addressQuery || '').trim();
+  if (!q) return null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=he&q=${encodeURIComponent(q)}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const lat = Number(rows[0].lat);
+    const lon = Number(rows[0].lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    return { lat, lon, displayName: rows[0].display_name || q };
+  } catch {
+    return null;
+  }
+}
+
+function showPlacesFeedback(msg) {
+  els.placesFeedback.hidden = false;
+  els.placesFeedback.textContent = msg;
+}
+
+function renderPlaces(force = false) {
+  if (!force && els.placesList.contains(document.activeElement)) {
+    return;
+  }
+  const places = appState.coupleState?.savedPlaces || appState.settings.savedPlaces || DEFAULT_SETTINGS.savedPlaces;
   els.placesList.innerHTML = '';
+
   for (const p of places) {
     const li = document.createElement('li');
-    li.className = 'manage-item';
-    const info = document.createElement('span');
-    info.innerHTML = `<strong>${p.icon} ${p.name}</strong> <small dir="ltr">(${p.lat.toFixed(4)}, ${p.lon.toFixed(4)})</small>`;
+    li.className = 'place-item-card';
 
-    const updateBtn = document.createElement('button');
-    updateBtn.type = 'button';
-    updateBtn.className = 'btn-secondary btn-sm';
-    updateBtn.textContent = 'קבע למיקום הנוכחי';
-    updateBtn.addEventListener('click', async () => {
-      if (!appState.lastFix) {
-        showDemoFeedback('📍 קבל קודם מיקום GPS (לחץ "התחל ניטור נסיעה") ואז ניתן לשמור מיקום מדויק.', 'warn');
-        return;
+    const inputsRow = document.createElement('div');
+    inputsRow.className = 'place-inputs-row';
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'place-name-input';
+    nameInput.value = p.name || '';
+    nameInput.placeholder = 'שם המקום';
+    nameInput.maxLength = 48;
+    nameInput.setAttribute('aria-label', `שם מקום ${p.name}`);
+
+    const addrInput = document.createElement('input');
+    addrInput.type = 'text';
+    addrInput.className = 'place-address-input';
+    addrInput.value = p.address || '';
+    addrInput.placeholder = 'כתובת מלאה (עיר ורחוב)';
+    addrInput.maxLength = 120;
+    addrInput.setAttribute('aria-label', `כתובת של ${p.name}`);
+
+    inputsRow.append(nameInput, addrInput);
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'place-actions-row';
+
+    const coordsEl = document.createElement('small');
+    coordsEl.className = 'muted-small';
+    coordsEl.dir = 'ltr';
+    coordsEl.textContent = `${p.icon || '📍'} GPS: ${Number(p.lat).toFixed(4)}, ${Number(p.lon).toFixed(4)}`;
+
+    const btnsGroup = document.createElement('div');
+    btnsGroup.className = 'place-btns-group';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn-primary btn-sm place-save-btn';
+    saveBtn.textContent = '🔍 חפש כתובת ושמור';
+    saveBtn.addEventListener('click', async () => {
+      const newName = nameInput.value.trim() || p.name;
+      const newAddr = addrInput.value.trim();
+      let newLat = p.lat;
+      let newLon = p.lon;
+      let geoNote = '';
+
+      if (newAddr && newAddr !== (p.address || '').trim()) {
+        saveBtn.textContent = 'מחפש...';
+        const geo = await geocodeAddress(newAddr);
+        saveBtn.textContent = '🔍 חפש כתובת ושמור';
+        if (geo) {
+          newLat = geo.lat;
+          newLon = geo.lon;
+          geoNote = ` (אותר GPS: ${newLat.toFixed(4)}, ${newLon.toFixed(4)})`;
+        } else {
+          geoNote = ' (נשמרה הכתובת; לא נמצא דיוק אוטומטי במפה)';
+        }
       }
+
+      p.name = newName;
+      p.address = newAddr;
+      p.lat = newLat;
+      p.lon = newLon;
+      appState.settings.savedPlaces = places;
+      saveSettings();
+
       await apiPostEvent('UPDATE_PLACE', {
         placeId: p.id,
-        lat: appState.lastFix.lat,
-        lon: appState.lastFix.lon
+        name: newName,
+        address: newAddr,
+        lat: newLat,
+        lon: newLon
       });
-      showDemoFeedback(`📍 המיקום של <strong>${p.name}</strong> עודכן לפי ה-GPS הנוכחי שלך!`, 'safe');
+      renderPlaces(true);
+      showPlacesFeedback(`✅ נשמר: "${newName}" — ${newAddr || 'ללא כתובת'}${geoNote}`);
     });
-    li.append(info, updateBtn);
+
+    const gpsBtn = document.createElement('button');
+    gpsBtn.type = 'button';
+    gpsBtn.className = 'btn-secondary btn-sm place-gps-btn';
+    gpsBtn.textContent = '📍 מיקום נוכחי';
+    gpsBtn.addEventListener('click', async () => {
+      const saveCoords = async (lat, lon) => {
+        p.lat = lat;
+        p.lon = lon;
+        appState.settings.savedPlaces = places;
+        saveSettings();
+        await apiPostEvent('UPDATE_PLACE', { placeId: p.id, name: nameInput.value.trim() || p.name, address: addrInput.value.trim(), lat, lon });
+        renderPlaces(true);
+        showPlacesFeedback(`📍 המיקום של "${p.name}" עודכן לנקודת ה-GPS הנוכחית!`);
+      };
+
+      if (appState.lastFix) {
+        await saveCoords(appState.lastFix.lat, appState.lastFix.lon);
+      } else if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => saveCoords(pos.coords.latitude, pos.coords.longitude),
+          () => showPlacesFeedback('⚠️ לא ניתן למשוך מיקום GPS כרגע – הזן כתובת ולחץ "חפש כתובת ושמור".')
+        );
+      } else {
+        showPlacesFeedback('⚠️ GPS לא זמין בדפדפן – הזן כתובת ולחץ "חפש כתובת ושמור".');
+      }
+    });
+
+    btnsGroup.append(saveBtn, gpsBtn);
+
+    if (!['home', 'daycare', 'work'].includes(p.id)) {
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'remove-btn place-delete-btn';
+      delBtn.textContent = 'הסר';
+      delBtn.addEventListener('click', async () => {
+        appState.settings.savedPlaces = places.filter((item) => item.id !== p.id);
+        saveSettings();
+        await apiPostEvent('DELETE_PLACE', { placeId: p.id });
+        renderPlaces(true);
+        showPlacesFeedback(`🗑️ המקום "${p.name}" הוסר.`);
+      });
+      btnsGroup.appendChild(delBtn);
+    }
+
+    actionsRow.append(coordsEl, btnsGroup);
+    li.append(inputsRow, actionsRow);
     els.placesList.appendChild(li);
   }
 }
@@ -1923,16 +2095,35 @@ function renderChildren() {
     els.aboardChips.appendChild(chip);
 
     const li = document.createElement('li');
-    li.className = 'manage-item';
-    const info = document.createElement('span');
-    const nameEl = document.createElement('strong');
-    nameEl.textContent = child.name;
-    info.appendChild(nameEl);
-    if (child.seat) {
-      const seatEl = document.createElement('small');
-      seatEl.textContent = `(${child.seat})`;
-      info.appendChild(seatEl);
-    }
+    li.className = 'child-edit-row';
+
+    const editName = document.createElement('input');
+    editName.type = 'text';
+    editName.className = 'child-edit-name';
+    editName.value = child.name;
+    editName.maxLength = 24;
+    editName.setAttribute('aria-label', `עריכת שם ${child.name}`);
+
+    const editSeat = document.createElement('input');
+    editSeat.type = 'text';
+    editSeat.className = 'child-edit-seat';
+    editSeat.value = child.seat || '';
+    editSeat.placeholder = 'מיקום מושב';
+    editSeat.maxLength = 28;
+    editSeat.setAttribute('aria-label', `עריכת מושב ${child.name}`);
+
+    const saveChildBtn = document.createElement('button');
+    saveChildBtn.type = 'button';
+    saveChildBtn.className = 'btn-secondary btn-sm save-child-btn';
+    saveChildBtn.textContent = 'שמור';
+    saveChildBtn.addEventListener('click', () => {
+      const n = editName.value.trim();
+      if (!n) return;
+      child.name = n;
+      child.seat = editSeat.value.trim();
+      saveSettings();
+      renderChildren();
+    });
 
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -1943,9 +2134,31 @@ function renderChildren() {
       saveSettings();
       renderChildren();
     });
-    li.append(info, delBtn);
+
+    li.append(editName, editSeat, saveChildBtn, delBtn);
     els.childrenManageList.appendChild(li);
   }
+}
+
+function syncNamesToUI() {
+  const myName = appState.settings.myName || 'אלון';
+  const partnerName = appState.settings.partnerName || 'דנה';
+  const guestName = appState.settings.guestName || 'סבא/סבתא';
+
+  const optMe = els.roleSelect.querySelector('option[value="me"]');
+  const optPartner = els.roleSelect.querySelector('option[value="partner"]');
+  const optGuest = els.roleSelect.querySelector('option[value="guest"]');
+  if (optMe) optMe.textContent = `נהג: אני (${myName})`;
+  if (optPartner) optPartner.textContent = `נהגת: בת הזוג (${partnerName})`;
+  if (optGuest) optGuest.textContent = `נהג אורח (${guestName})`;
+  els.roleSelect.value = appState.settings.driverRoleKey || 'me';
+
+  const btnMe = els.pickupSyncBar.querySelector('[data-assignee="אני"]');
+  const btnPartner = els.pickupSyncBar.querySelector('[data-assignee="בת הזוג"]');
+  const btnGuest = els.pickupSyncBar.querySelector('[data-assignee="סבא/סבתא"]');
+  if (btnMe) btnMe.textContent = `אני (${myName})`;
+  if (btnPartner) btnPartner.textContent = `בת הזוג (${partnerName})`;
+  if (btnGuest) btnGuest.textContent = guestName;
 }
 
 function renderVerificationModes() {
@@ -1955,7 +2168,10 @@ function renderVerificationModes() {
 }
 
 function renderSettingsControls() {
-  els.roleSelect.value = appState.settings.driverRole;
+  els.myNameInput.value = appState.settings.myName || 'אלון';
+  els.partnerNameInput.value = appState.settings.partnerName || 'דנה';
+  els.guestNameInput.value = appState.settings.guestName || 'סבא/סבתא';
+  syncNamesToUI();
   els.settingAutoDetect.checked = appState.settings.autoDetect;
   els.settingMicrotripFilter.checked = appState.settings.microTripFilter;
   els.settingVoice.checked = appState.settings.voiceAlert;
@@ -2064,8 +2280,73 @@ function initDialogs() {
 // ============================================================================
 function bindEvents() {
   els.roleSelect.addEventListener('change', () => {
-    appState.settings.driverRole = els.roleSelect.value;
+    appState.settings.driverRoleKey = els.roleSelect.value;
     saveSettings();
+  });
+
+  const applyCoupleNames = async (syncServer = true) => {
+    const myName = els.myNameInput.value.trim() || 'אלון';
+    const partnerName = els.partnerNameInput.value.trim() || 'דנה';
+    const guestName = els.guestNameInput.value.trim() || 'סבא/סבתא';
+    appState.settings.myName = myName;
+    appState.settings.partnerName = partnerName;
+    appState.settings.guestName = guestName;
+    if (!appState.settings.emergencyContactName || appState.settings.emergencyContactName === 'דנה') {
+      appState.settings.emergencyContactName = partnerName;
+      els.contactNameInput.value = partnerName;
+    }
+    saveSettings();
+    syncNamesToUI();
+    if (syncServer) {
+      await apiPostEvent('UPDATE_PROFILES', { myName, partnerName, guestName });
+      els.namesSavedFeedback.textContent = 'השמות נשמרו וסונכרנו ✓';
+      setTimeout(() => {
+        els.namesSavedFeedback.textContent = '';
+      }, 2500);
+    }
+  };
+
+  els.saveNamesBtn.addEventListener('click', () => applyCoupleNames(true));
+  for (const inp of [els.myNameInput, els.partnerNameInput, els.guestNameInput]) {
+    inp.addEventListener('input', () => {
+      appState.settings.myName = els.myNameInput.value.trim() || 'אלון';
+      appState.settings.partnerName = els.partnerNameInput.value.trim() || 'דנה';
+      appState.settings.guestName = els.guestNameInput.value.trim() || 'סבא/סבתא';
+      saveSettings();
+      syncNamesToUI();
+    });
+  }
+
+  els.addPlaceForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const icon = els.newPlaceIcon.value.trim() || '📍';
+    const name = els.newPlaceName.value.trim();
+    const address = els.newPlaceAddress.value.trim();
+    if (!name) return;
+
+    let lat = appState.lastFix?.lat || 32.0853;
+    let lon = appState.lastFix?.lon || 34.7818;
+    let geoNote = '';
+    if (address) {
+      const geo = await geocodeAddress(address);
+      if (geo) {
+        lat = geo.lat;
+        lon = geo.lon;
+        geoNote = ` (אותר GPS: ${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+      }
+    }
+
+    const newPlace = { id: 'p_' + Date.now(), icon, name, address, lat, lon, radiusM: 150 };
+    const list = appState.coupleState?.savedPlaces || appState.settings.savedPlaces || [];
+    list.push(newPlace);
+    appState.settings.savedPlaces = list;
+    saveSettings();
+
+    els.newPlaceName.value = '';
+    els.newPlaceAddress.value = '';
+    await apiPostEvent('ADD_PLACE', { icon, name, address, lat, lon });
+    renderPlaces(true);
+    showPlacesFeedback(`✅ נוסף מקום חדש: "${name}" — ${address}${geoNote}`);
   });
 
   els.shareGuestBtn.addEventListener('click', async () => {
@@ -2284,7 +2565,7 @@ async function handleDeepLinkParams() {
   const role = params.get('role');
 
   if (role === 'guest') {
-    appState.settings.driverRole = 'סבא/סבתא (אורח)';
+    appState.settings.driverRoleKey = 'guest';
     saveSettings();
     renderSettingsControls();
   }

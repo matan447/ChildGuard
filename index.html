@@ -48,9 +48,9 @@
         <div class="role-controls">
           <label class="sr-only" for="role-select">מי נוהג כעת</label>
           <select id="role-select" class="role-select">
-            <option value="אני (אלון)">נהג: אני (אלון)</option>
-            <option value="בת הזוג (דנה)">נהגת: בת הזוג (דנה)</option>
-            <option value="סבא/סבתא (אורח)">נהג אורח (סבא/סבתא)</option>
+            <option value="me">נהג: אני (אלון)</option>
+            <option value="partner">נהגת: בת הזוג (דנה)</option>
+            <option value="guest">נהג אורח (סבא/סבתא)</option>
           </select>
           <button type="button" id="share-guest-btn" class="pill-btn">
             שתף לנהג אורח
@@ -240,16 +240,51 @@
       </div>
     </section>
 
-    <!-- 5. Saved Places (Routine Detection) -->
+    <!-- 5. Saved Places & Editable Addresses -->
     <section id="places-card" class="card" aria-labelledby="places-heading">
-      <h2 id="places-heading">מקומות קבועים (לזיהוי גן, בית ועבודה)</h2>
-      <p class="section-sub">המערכת מזהה אם הגעת לגן, או אם חנית בעבודה בלי שעצרת בגן הבוקר</p>
+      <h2 id="places-heading">מקומות וכתובות קבועות (לזיהוי גן, בית ועבודה)</h2>
+      <p class="section-sub">ערוך כאן את שם המקום והכתובת המלאה, או הוסף מקומות חדשים. לחיצה על "חפש כתובת ושמור" מתרגמת את הכתובת למיקום GPS</p>
+
+      <form id="add-place-form" class="inline-form place-add-form" autocomplete="off">
+        <label class="sr-only" for="new-place-icon">אייקון</label>
+        <input id="new-place-icon" type="text" value="📍" maxlength="4" class="icon-input" aria-label="אייקון מקום">
+        <label class="sr-only" for="new-place-name">שם המקום</label>
+        <input id="new-place-name" type="text" placeholder="שם המקום (למשל: בית סבתא)" maxlength="48" required>
+        <label class="sr-only" for="new-place-address">כתובת מלאה</label>
+        <input id="new-place-address" type="text" placeholder="כתובת (למשל: הרצל 10, תל אביב)" maxlength="120" required>
+        <button type="submit" class="btn-secondary">הוסף מקום</button>
+      </form>
+
+      <p id="places-feedback" class="places-feedback" hidden aria-live="polite"></p>
       <ul id="places-list" class="manage-list"></ul>
     </section>
 
     <!-- 6. Children & Safety Settings -->
     <section class="card" aria-labelledby="settings-heading">
-      <h2 id="settings-heading">פרופילי ילדים, הגנות והגדרות</h2>
+      <h2 id="settings-heading">שמות בני הזוג, פרופילי ילדים והגדרות</h2>
+
+      <div id="couple-names-box" class="names-edit-box">
+        <div class="names-grid">
+          <label class="field">
+            <span>השם שלך (נהג ראשי)</span>
+            <input id="my-name-input" type="text" placeholder="למשל: מתן" maxlength="32">
+          </label>
+          <label class="field">
+            <span>שם בן/בת הזוג</span>
+            <input id="partner-name-input" type="text" placeholder="למשל: שירה" maxlength="32">
+          </label>
+          <label class="field">
+            <span>שם נהג אורח</span>
+            <input id="guest-name-input" type="text" placeholder="למשל: סבא / סבתא" maxlength="32">
+          </label>
+        </div>
+        <div class="names-actions">
+          <button type="button" id="save-names-btn" class="btn-secondary btn-sm">שמור שמות</button>
+          <span id="names-saved-feedback" class="muted-small" aria-live="polite"></span>
+        </div>
+      </div>
+
+      <hr class="divider">
 
       <form id="add-child-form" class="inline-form" autocomplete="off">
         <label class="sr-only" for="child-name-input">שם הילד/ה</label>

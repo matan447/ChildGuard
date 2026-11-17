@@ -31,6 +31,11 @@ function createDefaultState() {
   return {
     familyPin: '1234',
     dayKey: todayKey(),
+    profiles: {
+      myName: 'אלון',
+      partnerName: 'דנה',
+      guestName: 'סבא/סבתא'
+    },
     coupleStatus: {
       state: 'IDLE',
       driverName: 'אני (אלון)',
@@ -51,9 +56,9 @@ function createDefaultState() {
       updatedBy: 'אני (אלון)'
     },
     savedPlaces: [
-      { id: 'home', icon: '🏠', name: 'הבית', lat: 32.0853, lon: 34.7818, radiusM: 150 },
-      { id: 'daycare', icon: '🧸', name: 'הגן של נועה', lat: 32.0912, lon: 34.7865, radiusM: 150 },
-      { id: 'work', icon: '💼', name: 'מקום העבודה', lat: 32.0731, lon: 34.7922, radiusM: 150 }
+      { id: 'home', icon: '🏠', name: 'הבית', address: 'תל אביב', lat: 32.0853, lon: 34.7818, radiusM: 150 },
+      { id: 'daycare', icon: '🧸', name: 'הגן של נועה', address: 'תל אביב', lat: 32.0912, lon: 34.7865, radiusM: 150 },
+      { id: 'work', icon: '💼', name: 'מקום העבודה', address: 'תל אביב', lat: 32.0731, lon: 34.7922, radiusM: 150 }
     ],
     history: []
   };
@@ -67,12 +72,16 @@ function loadFamilyState() {
       return def;
     }
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    const def = createDefaultState();
     return {
-      ...createDefaultState(),
+      ...def,
       ...parsed,
-      coupleStatus: { ...createDefaultState().coupleStatus, ...(parsed.coupleStatus || {}) },
-      pickupToday: { ...createDefaultState().pickupToday, ...(parsed.pickupToday || {}) },
-      savedPlaces: Array.isArray(parsed.savedPlaces) ? parsed.savedPlaces : createDefaultState().savedPlaces,
+      profiles: { ...def.profiles, ...(parsed.profiles || {}) },
+      coupleStatus: { ...def.coupleStatus, ...(parsed.coupleStatus || {}) },
+      pickupToday: { ...def.pickupToday, ...(parsed.pickupToday || {}) },
+      savedPlaces: Array.isArray(parsed.savedPlaces)
+        ? parsed.savedPlaces.map((p) => ({ address: '', ...p }))
+        : def.savedPlaces,
       history: Array.isArray(parsed.history) ? parsed.history : []
     };
   } catch {
@@ -392,10 +401,61 @@ function handleApi(req, res, reqUrl) {
 
           case 'UPDATE_PLACE': {
             const target = familyState.savedPlaces.find((p) => p.id === payload.placeId);
-            if (target && typeof payload.lat === 'number' && typeof payload.lon === 'number') {
-              target.lat = payload.lat;
-              target.lon = payload.lon;
+            if (target) {
+              if (typeof payload.name === 'string' && payload.name.trim()) {
+                target.name = payload.name.trim().slice(0, 48);
+              }
+              if (typeof payload.icon === 'string' && payload.icon.trim()) {
+                target.icon = payload.icon.trim().slice(0, 6);
+              }
+              if (typeof payload.address === 'string') {
+                target.address = payload.address.trim().slice(0, 120);
+              }
+              if (typeof payload.lat === 'number' && Number.isFinite(payload.lat)) {
+                target.lat = payload.lat;
+              }
+              if (typeof payload.lon === 'number' && Number.isFinite(payload.lon)) {
+                target.lon = payload.lon;
+              }
             }
+            break;
+          }
+
+          case 'ADD_PLACE': {
+            const name = typeof payload.name === 'string' ? payload.name.trim().slice(0, 48) : '';
+            if (name) {
+              familyState.savedPlaces.push({
+                id: 'p_' + now,
+                icon: (typeof payload.icon === 'string' && payload.icon.trim()) || '📍',
+                name,
+                address: typeof payload.address === 'string' ? payload.address.trim().slice(0, 120) : '',
+                lat: typeof payload.lat === 'number' && Number.isFinite(payload.lat) ? payload.lat : 32.0853,
+                lon: typeof payload.lon === 'number' && Number.isFinite(payload.lon) ? payload.lon : 34.7818,
+                radiusM: 150
+              });
+            }
+            break;
+          }
+
+          case 'DELETE_PLACE': {
+            if (payload.placeId) {
+              familyState.savedPlaces = familyState.savedPlaces.filter((p) => p.id !== payload.placeId);
+            }
+            break;
+          }
+
+          case 'UPDATE_PROFILES': {
+            familyState.profiles = {
+              myName:
+                (typeof payload.myName === 'string' && payload.myName.trim().slice(0, 32)) ||
+                familyState.profiles.myName,
+              partnerName:
+                (typeof payload.partnerName === 'string' && payload.partnerName.trim().slice(0, 32)) ||
+                familyState.profiles.partnerName,
+              guestName:
+                (typeof payload.guestName === 'string' && payload.guestName.trim().slice(0, 32)) ||
+                familyState.profiles.guestName
+            };
             break;
           }
 

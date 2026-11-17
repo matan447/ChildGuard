@@ -890,6 +890,110 @@ select {
   margin-inline-start: 8px;
 }
 
+/* Editable Places & Children & Names */
+.place-add-form {
+  grid-template-columns: 54px 1fr 1.4fr auto;
+}
+
+@media (max-width: 600px) {
+  .place-add-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+.icon-input {
+  text-align: center;
+}
+
+.place-item-card {
+  display: grid;
+  gap: 8px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.place-inputs-row {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr;
+  gap: 8px;
+}
+
+@media (max-width: 560px) {
+  .place-inputs-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.place-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.place-btns-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.places-feedback {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  color: #a7f3d0;
+  font-size: 0.85rem;
+}
+
+.names-edit-box {
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin-top: 10px;
+}
+
+.names-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+@media (max-width: 580px) {
+  .names-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.names-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.child-edit-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+@media (max-width: 560px) {
+  .child-edit-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .remove-btn {
   background: rgba(239, 68, 68, 0.15);
   border: 1px solid rgba(239, 68, 68, 0.35);
