@@ -53,6 +53,7 @@ function createDefaultState() {
   return {
     familyPin: '1234',
     dayKey: todayKey(),
+    placesUpdatedAt: new Date(0).toISOString(),
     profiles: {
       myName: 'אלון',
       partnerName: 'דנה',
@@ -345,6 +346,23 @@ function handleApi(req, res, reqUrl) {
         const timeStr = nowTimeHe();
         let meta = {};
 
+        if (Array.isArray(payload.clientPlaces)) {
+          const clientPlacesMs = Date.parse(payload.placesUpdatedAt || '') || 0;
+          const serverPlacesMs = Date.parse(familyState.placesUpdatedAt || '') || 0;
+          if (clientPlacesMs >= serverPlacesMs && clientPlacesMs > 0) {
+            familyState.savedPlaces = payload.clientPlaces.slice(0, 20).map((p) => ({
+              id: String(p.id || 'p_' + now).slice(0, 48),
+              icon: String(p.icon || '📍').slice(0, 16),
+              name: String(p.name || 'מקום').slice(0, 48),
+              address: String(p.address || '').slice(0, 120),
+              lat: typeof p.lat === 'number' && Number.isFinite(p.lat) ? p.lat : 32.0853,
+              lon: typeof p.lon === 'number' && Number.isFinite(p.lon) ? p.lon : 34.7818,
+              radiusM: typeof p.radiusM === 'number' && Number.isFinite(p.radiusM) ? p.radiusM : 150
+            }));
+            familyState.placesUpdatedAt = payload.placesUpdatedAt;
+          }
+        }
+
         switch (payload.type) {
           case 'TRIP_START': {
             cs.driverName = driverName;
@@ -512,7 +530,9 @@ function handleApi(req, res, reqUrl) {
               if (typeof payload.lon === 'number' && Number.isFinite(payload.lon)) {
                 target.lon = payload.lon;
               }
-              cs.updatedAt = new Date().toISOString();
+              const nowIso = new Date().toISOString();
+              familyState.placesUpdatedAt = nowIso;
+              cs.updatedAt = nowIso;
             }
             break;
           }
@@ -534,7 +554,9 @@ function handleApi(req, res, reqUrl) {
                 lon: typeof payload.lon === 'number' && Number.isFinite(payload.lon) ? payload.lon : 34.7818,
                 radiusM: 150
               });
-              cs.updatedAt = new Date().toISOString();
+              const nowIso = new Date().toISOString();
+              familyState.placesUpdatedAt = nowIso;
+              cs.updatedAt = nowIso;
             }
             break;
           }
@@ -542,8 +564,18 @@ function handleApi(req, res, reqUrl) {
           case 'DELETE_PLACE': {
             if (payload.placeId) {
               familyState.savedPlaces = familyState.savedPlaces.filter((p) => p.id !== payload.placeId);
-              cs.updatedAt = new Date().toISOString();
+              const nowIso = new Date().toISOString();
+              familyState.placesUpdatedAt = nowIso;
+              cs.updatedAt = nowIso;
             }
+            break;
+          }
+
+          case 'RESET_PLACES': {
+            familyState.savedPlaces = createDefaultState().savedPlaces;
+            const nowIso = new Date().toISOString();
+            familyState.placesUpdatedAt = nowIso;
+            cs.updatedAt = nowIso;
             break;
           }
 

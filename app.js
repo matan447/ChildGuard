@@ -321,6 +321,7 @@ const DEFAULT_SETTINGS = {
   familyPin: '1234',
   savedVolumePct: 25,
   localUpdatedAt: '',
+  placesUpdatedAt: '',
   children: [
     { id: 'c1', name: 'נועה', seat: 'אחורי ימין', aboard: true },
     { id: 'c2', name: 'אורי', seat: 'אחורי שמאל', aboard: false }
@@ -414,6 +415,13 @@ function stampLocalUpdate() {
   saveSettings();
 }
 
+function stampPlacesUpdate() {
+  const nowIso = new Date().toISOString();
+  appState.settings.placesUpdatedAt = nowIso;
+  appState.settings.localUpdatedAt = nowIso;
+  saveSettings();
+}
+
 function loadHistory() {
   try {
     const raw = localStorage.getItem(STORAGE_HISTORY_KEY);
@@ -488,6 +496,7 @@ const els = {
   newPlaceAddress: document.getElementById('new-place-address'),
   placesFeedback: document.getElementById('places-feedback'),
   placesList: document.getElementById('places-list'),
+  resetPlacesBtn: document.getElementById('reset-places-btn'),
   myNameInput: document.getElementById('my-name-input'),
   partnerNameInput: document.getElementById('partner-name-input'),
   guestNameInput: document.getElementById('guest-name-input'),
@@ -633,12 +642,31 @@ function isDefaultColdSeed(data) {
   );
 }
 
+function isLegacySingleDaycareSnapshot(data) {
+  return (
+    Array.isArray(data?.savedPlaces) &&
+    data.savedPlaces.length === 1 &&
+    data.savedPlaces[0]?.id === 'daycare' &&
+    Number(data.savedPlaces[0]?.lat).toFixed(2) === '29.54'
+  );
+}
+
 function applyRemoteState(data) {
   if (!data || typeof data !== 'object') return;
   const remoteUpdatedMs = Date.parse(data?.coupleStatus?.updatedAt || '') || 0;
   const localUpdatedMs = Date.parse(appState.settings.localUpdatedAt || '') || 0;
+  const localPlacesMs = Date.parse(appState.settings.placesUpdatedAt || '') || 0;
+  const remotePlacesMs = Date.parse(data?.placesUpdatedAt || '') || 0;
   const isCold = isDefaultColdSeed(data);
+  const isLegacyDaycare = isLegacySingleDaycareSnapshot(data);
   const remoteIsStale = (localUpdatedMs > 0 && remoteUpdatedMs > 0 && remoteUpdatedMs + 500 < localUpdatedMs) || (localUpdatedMs > 0 && isCold);
+
+  const shouldApplyRemotePlaces =
+    Array.isArray(data.savedPlaces) &&
+    !remoteIsStale &&
+    !isLegacyDaycare &&
+    (remotePlacesMs > localPlacesMs + 500 ||
+      (localPlacesMs === 0 && !isCold && data.savedPlaces.length >= (appState.settings.savedPlaces?.length || 0)));
 
   appState.coupleState = {
     ...data,
@@ -648,10 +676,10 @@ function applyRemoteState(data) {
             myName: appState.settings.myName || 'אלון',
             partnerName: appState.settings.partnerName || 'דנה',
             guestName: appState.settings.guestName || 'סבא/סבתא'
-          },
-          savedPlaces: appState.settings.savedPlaces
+          }
         }
-      : {})
+      : {}),
+    savedPlaces: shouldApplyRemotePlaces ? data.savedPlaces : appState.settings.savedPlaces
   };
 
   if (
@@ -672,10 +700,13 @@ function applyRemoteState(data) {
       renderSettingsControls();
     }
   }
-  if (!remoteIsStale && Array.isArray(data.savedPlaces)) {
+  if (shouldApplyRemotePlaces) {
     const placesCard = document.getElementById('places-card');
     if (!placesCard || !placesCard.contains(document.activeElement)) {
       appState.settings.savedPlaces = data.savedPlaces;
+      if (data.placesUpdatedAt) {
+        appState.settings.placesUpdatedAt = data.placesUpdatedAt;
+      }
       saveSettings();
     }
   }
@@ -870,6 +901,8 @@ async function apiPostEvent(type, payload = {}) {
         type,
         driverName: getCurrentDriverName(),
         savedVolumePct: appState.settings.savedVolumePct,
+        clientPlaces: appState.settings.savedPlaces,
+        placesUpdatedAt: appState.settings.placesUpdatedAt,
         ...payload
       })
     });
@@ -2481,7 +2514,9 @@ function renderPlaces(force = false) {
       p.lon = newLon;
       appState.settings.savedPlaces = places;
       if (appState.coupleState) appState.coupleState.savedPlaces = places;
-      stampLocalUpdate();
+      stampPlacesUpdate();
+      renderPlaces(true);
+      showPlacesFeedback(`✅ נשמר: "${newName}" — ${newAddr || 'ללא כתובת'}${geoNote}`);
 
       await apiPostEvent('UPDATE_PLACE', {
         placeId: p.id,
@@ -2490,8 +2525,6 @@ function renderPlaces(force = false) {
         lat: newLat,
         lon: newLon
       });
-      renderPlaces(true);
-      showPlacesFeedback(`✅ נשמר: "${newName}" — ${newAddr || 'ללא כתובת'}${geoNote}`);
     });
 
     const gpsBtn = document.createElement('button');
@@ -2516,15 +2549,7 @@ function renderPlaces(force = false) {
         }
         appState.settings.savedPlaces = places;
         if (appState.coupleState) appState.coupleState.savedPlaces = places;
-        stampLocalUpdate();
-
-        await apiPostEvent('UPDATE_PLACE', {
-          placeId: p.id,
-          name: p.name,
-          address: p.address,
-          lat,
-          lon
-        });
+        stampPlacesUpdate();
         renderPlaces(true);
         const accNote =
           typeof accuracy === 'number' && Number.isFinite(accuracy)
@@ -2533,6 +2558,14 @@ function renderPlaces(force = false) {
         showPlacesFeedback(
           `📍 המיקום של "${p.name}" עודכן לנקודה הנוכחית${p.address ? `: ${p.address}` : ''}${accNote}`
         );
+
+        await apiPostEvent('UPDATE_PLACE', {
+          placeId: p.id,
+          name: p.name,
+          address: p.address,
+          lat,
+          lon
+        });
       };
 
       if ('geolocation' in navigator) {
@@ -2567,10 +2600,10 @@ function renderPlaces(force = false) {
       const nextPlaces = places.filter((item) => item.id !== p.id);
       appState.settings.savedPlaces = nextPlaces;
       if (appState.coupleState) appState.coupleState.savedPlaces = nextPlaces;
-      stampLocalUpdate();
-      await apiPostEvent('DELETE_PLACE', { placeId: p.id });
+      stampPlacesUpdate();
       renderPlaces(true);
       showPlacesFeedback(`🗑️ המקום "${p.name}" נמחק.`);
+      await apiPostEvent('DELETE_PLACE', { placeId: p.id });
     });
 
     btnsGroup.append(saveBtn, gpsBtn, delBtn);
@@ -2901,15 +2934,27 @@ function bindEvents() {
     list.push(newPlace);
     appState.settings.savedPlaces = list;
     if (appState.coupleState) appState.coupleState.savedPlaces = list;
-    stampLocalUpdate();
+    stampPlacesUpdate();
 
     els.newPlaceIcon.selectedIndex = 0;
     els.newPlaceName.value = '';
     els.newPlaceAddress.value = '';
-    await apiPostEvent('ADD_PLACE', { placeId: requestedId || undefined, icon, name, address, lat, lon });
     renderPlaces(true);
     showPlacesFeedback(`✅ נוסף מקום חדש: "${name}" — ${address}${geoNote}`);
+    await apiPostEvent('ADD_PLACE', { placeId: requestedId || undefined, icon, name, address, lat, lon });
   });
+
+  if (els.resetPlacesBtn) {
+    els.resetPlacesBtn.addEventListener('click', async () => {
+      const defaults = structuredClone(DEFAULT_SETTINGS.savedPlaces);
+      appState.settings.savedPlaces = defaults;
+      if (appState.coupleState) appState.coupleState.savedPlaces = defaults;
+      stampPlacesUpdate();
+      renderPlaces(true);
+      showPlacesFeedback('↺ שוחזרו 3 מקומות ברירת המחדל (הבית, הגן של נועה, מקום העבודה).');
+      await apiPostEvent('RESET_PLACES', {});
+    });
+  }
 
   els.shareGuestBtn.addEventListener('click', async () => {
     const guestUrl = `${window.location.origin}${window.location.pathname}?role=guest`;
@@ -3180,7 +3225,10 @@ async function handleDeepLinkParams() {
 
 function registerServiceWorker() {
   if ('serviceWorker' in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker
+      .register('./sw.js')
+      .then((reg) => reg.update())
+      .catch(() => {});
   }
 }
 

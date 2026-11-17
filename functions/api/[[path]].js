@@ -82,6 +82,7 @@ function createDefaultState() {
   return {
     familyPin: '1234',
     dayKey: todayKey(),
+    placesUpdatedAt: new Date(0).toISOString(),
     profiles: {
       myName: 'אלון',
       partnerName: 'דנה',
@@ -139,6 +140,21 @@ async function loadState(env, pin = '1234') {
   }
   if (!state) {
     state = memoryFallbackState || createDefaultState();
+  } else if (memoryFallbackState) {
+    const memPlacesMs = Date.parse(memoryFallbackState.placesUpdatedAt || '') || 0;
+    const statePlacesMs = Date.parse(state.placesUpdatedAt || '') || 0;
+    if (memPlacesMs > statePlacesMs) {
+      state.savedPlaces = memoryFallbackState.savedPlaces;
+      state.placesUpdatedAt = memoryFallbackState.placesUpdatedAt;
+    }
+    const memUpdatedMs = Date.parse(memoryFallbackState.coupleStatus?.updatedAt || '') || 0;
+    const stateUpdatedMs = Date.parse(state.coupleStatus?.updatedAt || '') || 0;
+    if (memUpdatedMs > stateUpdatedMs) {
+      state.profiles = memoryFallbackState.profiles;
+      state.coupleStatus = memoryFallbackState.coupleStatus;
+      state.pickupToday = memoryFallbackState.pickupToday;
+      state.history = memoryFallbackState.history;
+    }
   }
   const def = createDefaultState();
   const normalized = {
@@ -165,13 +181,14 @@ async function saveState(env, state, pin = '1234') {
     }
   }
   try {
-    await fetch(firestoreDocUrl(pin), {
+    const res = await fetch(firestoreDocUrl(pin), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields: buildFirestoreFields(state) })
     });
+    return res.ok;
   } catch {
-    // Ignore if Firestore DB is not yet provisioned
+    return false;
   }
 }
 
@@ -317,6 +334,23 @@ export async function onRequest(context) {
     const driverName = payload.driverName || cs.driverName || 'אני (אלון)';
     const timeStr = nowTimeHe();
     let meta = {};
+
+    if (Array.isArray(payload.clientPlaces)) {
+      const clientPlacesMs = Date.parse(payload.placesUpdatedAt || '') || 0;
+      const serverPlacesMs = Date.parse(familyState.placesUpdatedAt || '') || 0;
+      if (clientPlacesMs >= serverPlacesMs && clientPlacesMs > 0) {
+        familyState.savedPlaces = payload.clientPlaces.slice(0, 20).map((p) => ({
+          id: String(p.id || 'p_' + now).slice(0, 48),
+          icon: String(p.icon || '📍').slice(0, 16),
+          name: String(p.name || 'מקום').slice(0, 48),
+          address: String(p.address || '').slice(0, 120),
+          lat: typeof p.lat === 'number' && Number.isFinite(p.lat) ? p.lat : 32.0853,
+          lon: typeof p.lon === 'number' && Number.isFinite(p.lon) ? p.lon : 34.7818,
+          radiusM: typeof p.radiusM === 'number' && Number.isFinite(p.radiusM) ? p.radiusM : 150
+        }));
+        familyState.placesUpdatedAt = payload.placesUpdatedAt;
+      }
+    }
 
     switch (payload.type) {
       case 'TRIP_START': {
@@ -486,7 +520,9 @@ export async function onRequest(context) {
             target.lon = payload.lon;
           }
         }
-        cs.updatedAt = new Date().toISOString();
+        const nowIso = new Date().toISOString();
+        familyState.placesUpdatedAt = nowIso;
+        cs.updatedAt = nowIso;
         break;
       }
 
@@ -507,7 +543,9 @@ export async function onRequest(context) {
             lon: typeof payload.lon === 'number' && Number.isFinite(payload.lon) ? payload.lon : 34.7818,
             radiusM: 150
           });
-          cs.updatedAt = new Date().toISOString();
+          const nowIso = new Date().toISOString();
+          familyState.placesUpdatedAt = nowIso;
+          cs.updatedAt = nowIso;
         }
         break;
       }
@@ -515,8 +553,18 @@ export async function onRequest(context) {
       case 'DELETE_PLACE': {
         if (payload.placeId) {
           familyState.savedPlaces = familyState.savedPlaces.filter((p) => p.id !== payload.placeId);
-          cs.updatedAt = new Date().toISOString();
+          const nowIso = new Date().toISOString();
+          familyState.placesUpdatedAt = nowIso;
+          cs.updatedAt = nowIso;
         }
+        break;
+      }
+
+      case 'RESET_PLACES': {
+        familyState.savedPlaces = createDefaultState().savedPlaces;
+        const nowIso = new Date().toISOString();
+        familyState.placesUpdatedAt = nowIso;
+        cs.updatedAt = nowIso;
         break;
       }
 
