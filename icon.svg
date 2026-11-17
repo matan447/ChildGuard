@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="שומר הילדים">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M256 64 L416 124 V246 C416 346 346 420 256 452 C166 420 96 346 96 246 V124 Z" fill="url(#shield)" opacity="0.18"/>
+  <path d="M256 88 L392 140 V244 C392 330 332 394 256 424 C180 394 120 330 120 244 V140 Z" fill="none" stroke="url(#shield)" stroke-width="22" stroke-linejoin="round"/>
+  <!-- Stylized child & car-seat safety mark -->
+  <circle cx="256" cy="204" r="38" fill="#fef3c7"/>
+  <path d="M196 312 C196 268 222 248 256 248 C290 248 316 268 316 312" fill="none" stroke="#fef3c7" stroke-width="24" stroke-linecap="round"/>
+  <!-- Check / guard badge -->
+  <circle cx="352" cy="348" r="56" fill="#10b981"/>
+  <path d="M326 348 L345 367 L380 330" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

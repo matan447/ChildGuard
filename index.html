@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="שומר הילדים">
+  <meta name="theme-color" content="#0f172a">
+  <title>שומר הילדים | ChildGuard – מערכת בטיחות זוגית לרכב</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/svg+xml" href="./icon.svg">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="security-banner" class="context-banner" hidden>
+    <strong>הערת אייפון:</strong>
+    העמוד נפתח בחיבור HTTP (<code><span id="origin-label"></span></code>). באייפון, שירותי GPS ומצלמה דורשים כתובת HTTPS. כל מנגנוני ההדגמה, ההתרעות והסנכרון הזוגי פועלים כאן לבדיקה מלאה.
+  </div>
+
+  <header class="app-header">
+    <div class="brand">
+      <img src="./icon.svg" alt="" class="brand-logo" width="40" height="40">
+      <div>
+        <h1>שומר הילדים <span class="version-pill">מהדורה זוגית</span></h1>
+        <p class="brand-sub">אפס התראות שווא • סנכרון חי בין בני הזוג</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button type="button" class="pill-btn" command="show-modal" commandfor="qr-dialog">
+        מדבקת QR
+      </button>
+      <button type="button" class="pill-btn pill-btn-accent" command="show-modal" commandfor="shortcuts-dialog">
+        חיבור לאייפון
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 1. Couple Live Status & Peace-of-Mind Card -->
+    <section id="couple-card" class="card couple-card" aria-labelledby="couple-heading">
+      <div class="couple-top-row">
+        <div>
+          <h2 id="couple-heading">סטטוס זוגי חי (שקט נפשי)</h2>
+          <p class="section-sub">מסונכרן בזמן אמת בין המכשיר שלך למכשיר של בת הזוג</p>
+        </div>
+        <div class="role-controls">
+          <label class="sr-only" for="role-select">מי נוהג כעת</label>
+          <select id="role-select" class="role-select">
+            <option value="אני (אלון)">נהג: אני (אלון)</option>
+            <option value="בת הזוג (דנה)">נהגת: בת הזוג (דנה)</option>
+            <option value="סבא/סבתא (אורח)">נהג אורח (סבא/סבתא)</option>
+          </select>
+          <button type="button" id="share-guest-btn" class="pill-btn">
+            שתף לנהג אורח
+          </button>
+        </div>
+      </div>
+
+      <div id="couple-live-status" class="couple-status-box" data-state="IDLE" aria-live="polite">
+        <span class="couple-status-dot" aria-hidden="true"></span>
+        <span id="couple-status-text">טוען סטטוס זוגי...</span>
+      </div>
+
+      <div id="couple-protection-banner" class="protection-banner" hidden>
+        <span id="couple-protection-text"></span>
+        <button type="button" id="cancel-suppression-btn" class="btn-text-light">בטל השהיה</button>
+      </div>
+
+      <!-- Afternoon Pickup Sync -->
+      <div id="pickup-sync-bar" class="pickup-bar">
+        <div class="pickup-head">
+          <strong>מי אוסף היום מהגן אחה"צ?</strong>
+          <span id="pickup-status-badge" class="pickup-badge">באחריות: אני</span>
+        </div>
+        <div class="pickup-buttons" role="group" aria-label="בחירת הורה אוסף להיום">
+          <button type="button" class="pickup-btn" data-assignee="אני" aria-pressed="true">אני</button>
+          <button type="button" class="pickup-btn" data-assignee="בת הזוג" aria-pressed="false">בת הזוג</button>
+          <button type="button" class="pickup-btn" data-assignee="סבא/סבתא" aria-pressed="false">סבא/סבתא</button>
+        </div>
+      </div>
+
+      <!-- Anti-Annoyance Quick Bar + Self Check -->
+      <div class="quick-utility-bar">
+        <button type="button" id="btn-solo-now" class="utility-btn">
+          🚗 נוסע לבד עכשיו (השתק לנסיעה זו)
+        </button>
+        <button type="button" id="btn-garage-mode" class="utility-btn">
+          🔧 מצב מוסך / שטיפה (3 שעות)
+        </button>
+        <button type="button" id="btn-self-check" class="utility-btn utility-btn-check">
+          🔍 בדיקת מוכנות ב-3 שניות
+        </button>
+      </div>
+
+      <div id="self-check-report" class="self-check-report" hidden aria-live="polite"></div>
+    </section>
+
+    <!-- 2. Interactive 6-Scenario Demo Lab -->
+    <section id="demo-lab-card" class="card demo-lab-card" aria-labelledby="demo-lab-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="demo-lab-heading">מעבדת דמו אינטראקטיבית (בדיקת כל התרחישים)</h2>
+          <p class="section-sub">לחץ על כל תרחיש מהחיים האמיתיים כדי לראות איך המערכת מגיבה מיד</p>
+        </div>
+        <button type="button" id="demo-reset-btn" class="btn-text">אפס יום לבדיקה</button>
+      </div>
+
+      <div class="demo-grid">
+        <button type="button" id="demo-daycare-btn" class="demo-btn">
+          <strong>🧸 1. הגעה לגן בבוקר + המשך לעבודה</strong>
+          <small>מראה הורדה בגן והשתקה אוטומטית בחניה בעבודה</small>
+        </button>
+        <button type="button" id="demo-broken-routine-btn" class="demo-btn demo-btn-alert">
+          <strong>🚨 2. שגרה שבורה! חניה בעבודה בלי גן</strong>
+          <small>הגעת לעבודה בבוקר בלי עצירה בגן – התרעה מיידית!</small>
+        </button>
+        <button type="button" id="demo-refuel-btn" class="demo-btn">
+          <strong>⛽ 3. עצירת תדלוק (2 דקות)</strong>
+          <small>מפעיל תזכורת ל-3 דק' בלי לשקר שהרכב ריק</small>
+        </button>
+        <button type="button" id="demo-microtrip-btn" class="demo-btn">
+          <strong>🅿️ 4. הזזת חניה / נסיעת סרק (40 שנ')</strong>
+          <small>מסנן נסיעה קצרה מ-2 דק' ו-150 מ' בשקט מוחלט</small>
+        </button>
+        <button type="button" id="demo-lowbat-btn" class="demo-btn">
+          <strong>🪫 5. כניסה לרכב עם 9% סוללה</strong>
+          <small>מזהה סוללה חלשה ומתריע מיד לחבר למטען</small>
+        </button>
+        <button type="button" id="demo-heatwave-btn" class="demo-btn">
+          <strong>☀️ 6. חניה ביום שרב (35°C)</strong>
+          <small>חיישן טמפרטורה מקצר השהיות ומציג אזהרת חום</small>
+        </button>
+      </div>
+
+      <div id="demo-feedback-box" class="demo-feedback-box" hidden aria-live="polite"></div>
+    </section>
+
+    <!-- 3. Hero Telemetry & Trip Monitor Card -->
+    <section id="monitor-card" class="card monitor-card" aria-labelledby="monitor-heading">
+      <div class="card-top-row">
+        <h2 id="monitor-heading" class="sr-only">מצב ניטור נסיעה</h2>
+        <div id="status-pill" class="status-pill" data-state="IDLE">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-label">מוכן לניטור נסיעה</span>
+        </div>
+        <div class="badges-row">
+          <span id="temp-badge" class="mini-badge">🌡️ —</span>
+          <span id="audio-badge" class="mini-badge" data-ready="false">סירנה תידרך בלחיצה</span>
+          <span id="wakelock-badge" class="mini-badge" data-ready="false">מסך רגיל</span>
+        </div>
+      </div>
+
+      <div class="telemetry-grid">
+        <div class="speed-gauge" aria-live="polite">
+          <svg class="gauge-svg" viewBox="0 0 140 140" aria-hidden="true">
+            <circle class="gauge-track" cx="70" cy="70" r="58"></circle>
+            <circle id="gauge-progress" class="gauge-progress" cx="70" cy="70" r="58"></circle>
+          </svg>
+          <div class="gauge-center">
+            <span id="speed-value" class="speed-number">0</span>
+            <span class="speed-unit">קמ"ש</span>
+          </div>
+        </div>
+
+        <div class="telemetry-details">
+          <p id="state-description" class="state-description">
+            המערכת מוכנה. באייפון היא מופעלת אוטומטית דרך קיצורי הדרך (Bluetooth/CarPlay) גם כשהמסך כבוי, וכאן ניתן גם להפעיל ניטור ישיר או סימולציה.
+          </p>
+          <div class="telemetry-meta">
+            <div class="meta-box">
+              <span class="meta-label">שיא מהירות</span>
+              <strong id="max-speed-value">0 קמ"ש</strong>
+            </div>
+            <div class="meta-box">
+              <span class="meta-label">השהיה / עצירה</span>
+              <strong id="stop-countdown-value">—</strong>
+            </div>
+            <div class="meta-box">
+              <span class="meta-label">דיוק GPS</span>
+              <strong id="gps-accuracy-value">ממתין</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="children-aboard-block">
+        <div class="block-header">
+          <span class="block-title">מי נוסע איתך ברכב כרגע?</span>
+          <span id="aboard-count-label" class="muted-small"></span>
+        </div>
+        <div id="aboard-chips" class="chips-list" role="group" aria-label="בחירת ילדים בנסיעה הנוכחית"></div>
+      </div>
+
+      <div class="primary-actions">
+        <button type="button" id="toggle-monitor-btn" class="btn-primary btn-xl">
+          התחל ניטור נסיעה (GPS)
+        </button>
+        <div class="sim-actions">
+          <button type="button" id="simulate-trip-btn" class="btn-secondary">
+            סימולציית נסיעה מלאה
+          </button>
+          <button type="button" id="instant-alarm-btn" class="btn-danger-outline">
+            בדיקת התרעת סיום מיד
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Verification Mode Selector -->
+    <section class="card" aria-labelledby="verify-mode-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="verify-mode-heading">איך מאשרים בסיום הנסיעה?</h2>
+          <p class="section-sub">מותאם לפתיחה ביד אחת גם כשמחזיקים תינוק ותיקים, בלי כיבוי אוטומטי מתוך הרגל</p>
+        </div>
+      </div>
+      <div id="verification-mode-grid" class="mode-grid mode-grid-4" role="radiogroup" aria-label="שיטת אימות לבדיקת רכב">
+        <button type="button" class="mode-card" data-mode="onethumb" aria-pressed="true">
+          <span class="mode-icon" aria-hidden="true">👍</span>
+          <strong>יד אחת – כפתורי ענק (מומלץ)</strong>
+          <small>הקשה על 2 ספרות מוארות לפי הסדר ביד אחת תוך שנייה</small>
+        </button>
+        <button type="button" class="mode-card" data-mode="hold" aria-pressed="false">
+          <span class="mode-icon" aria-hidden="true">✋</span>
+          <strong>לחיצה ממושכת + מתג דלת</strong>
+          <small>הפעלת מתג אישור פתיחת דלת + החזקה רצופה של 3 שניות</small>
+        </button>
+        <button type="button" class="mode-card" data-mode="code" aria-pressed="false">
+          <span class="mode-icon" aria-hidden="true">🔢</span>
+          <strong>קוד ערנות 4 ספרות</strong>
+          <small>הקלדת קוד אקראי במקלדת מעורבלת למניעת טייס אוטומטי</small>
+        </button>
+        <button type="button" class="mode-card" data-mode="qr" aria-pressed="false">
+          <span class="mode-icon" aria-hidden="true">📷</span>
+          <strong>סריקת QR במושב האחורי</strong>
+          <small>צילום המדבקה המודבקת ליד כיסא הבטיחות מאחור</small>
+        </button>
+      </div>
+    </section>
+
+    <!-- 5. Saved Places (Routine Detection) -->
+    <section id="places-card" class="card" aria-labelledby="places-heading">
+      <h2 id="places-heading">מקומות קבועים (לזיהוי גן, בית ועבודה)</h2>
+      <p class="section-sub">המערכת מזהה אם הגעת לגן, או אם חנית בעבודה בלי שעצרת בגן הבוקר</p>
+      <ul id="places-list" class="manage-list"></ul>
+    </section>
+
+    <!-- 6. Children & Safety Settings -->
+    <section class="card" aria-labelledby="settings-heading">
+      <h2 id="settings-heading">פרופילי ילדים, הגנות והגדרות</h2>
+
+      <form id="add-child-form" class="inline-form" autocomplete="off">
+        <label class="sr-only" for="child-name-input">שם הילד/ה</label>
+        <input id="child-name-input" type="text" placeholder="הוסף ילד/ה (למשל: נועה)" maxlength="24" required>
+        <label class="sr-only" for="child-seat-input">מיקום מושב</label>
+        <input id="child-seat-input" type="text" placeholder="מיקום (אחורי ימין)" maxlength="28">
+        <button type="submit" class="btn-secondary">הוסף</button>
+      </form>
+
+      <ul id="children-manage-list" class="manage-list" aria-label="רשימת פרופילי ילדים"></ul>
+
+      <hr class="divider">
+
+      <div class="switches-list">
+        <label class="switch-row">
+          <span>
+            <strong>זיהוי נסיעה ועצירה אוטומטי (GPS)</strong>
+            <small>מזהה אוטומטית נסיעה, התרחקות מהרכב (מעל 20 מ') ועצירה בסיום</small>
+          </span>
+          <input id="setting-auto-detect" type="checkbox" switch checked>
+        </label>
+
+        <label class="switch-row">
+          <span>
+            <strong>סינון נסיעות סרק (&lt; 2 דק' ו-150 מ')</strong>
+            <small>מונע התרעות כשמזיזים את האוטו בחניה או פותחים בגאז'</small>
+          </span>
+          <input id="setting-microtrip-filter" type="checkbox" switch checked>
+        </label>
+
+        <label class="switch-row">
+          <span>
+            <strong>סירנה, הקראה בעברית ושחזור ווליום אוטומטי</strong>
+            <small>שומר את הווליום הקודם, מעלה ל-100% בהתרעה ומחזיר אוטומטית באישור</small>
+          </span>
+          <input id="setting-voice" type="checkbox" switch checked>
+        </label>
+
+        <label class="switch-row">
+          <span>
+            <strong>השארת מסך ער בניטור פתוח (Wake Lock)</strong>
+            <small>שימושי רק כשהדפדפן פתוח ברכב; ברקע פועל דרך קיצורי אייפון</small>
+          </span>
+          <input id="setting-wakelock" type="checkbox" switch checked>
+        </label>
+
+        <label class="switch-row">
+          <span>
+            <strong>הסלמת חירום רגועה לבן/בת זוג</strong>
+            <small>שולח הודעה עם מיקום GPS וכפתור חיוג רק אחרי זמן ההמתנה או התרחקות</small>
+          </span>
+          <input id="setting-escalation" type="checkbox" switch checked>
+        </label>
+
+        <label class="switch-row">
+          <span>
+            <strong>שעות לילה שקטות (21:30–06:30)</strong>
+            <small>מונע סירנות אוטומטיות בנסיעות לילה מאוחרות לבד</small>
+          </span>
+          <input id="setting-night-quiet" type="checkbox" switch>
+        </label>
+      </div>
+
+      <div class="thresholds-grid">
+        <label class="field">
+          <span>סף מהירות לזיהוי נסיעה</span>
+          <select id="setting-speed-threshold">
+            <option value="10">10 קמ"ש (רגיש)</option>
+            <option value="15" selected>15 קמ"ש (מומלץ)</option>
+            <option value="20">20 קמ"ש (עירוני)</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>השהיה שקטה בכיבוי הרכב</span>
+          <select id="setting-stop-delay">
+            <option value="5">5 שניות (לבדיקה מהירה)</option>
+            <option value="20">20 שניות</option>
+            <option value="60" selected>60 שניות (מומלץ – לתדלוק/התארגנות)</option>
+            <option value="90">90 שניות</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>זמן עד הסלמה לבן/בת זוג</span>
+          <select id="setting-escalation-delay">
+            <option value="60">60 שניות</option>
+            <option value="90">90 שניות</option>
+            <option value="180" selected>3 דקות (מומלץ – בלי לחץ שווא)</option>
+          </select>
+        </label>
+      </div>
+
+      <hr class="divider">
+
+      <div class="emergency-contact-grid">
+        <label class="field">
+          <span>שם בן/בת הזוג</span>
+          <input id="contact-name-input" type="text" placeholder="למשל: דנה" maxlength="32">
+        </label>
+        <label class="field">
+          <span>טלפון נייד (חיוג / WhatsApp / SMS)</span>
+          <input id="contact-phone-input" type="tel" dir="ltr" placeholder="0501234567" maxlength="20">
+        </label>
+        <label class="field">
+          <span>קוד סודי זוגי (PIN לשרת)</span>
+          <input id="family-pin-input" type="text" dir="ltr" value="1234" maxlength="12">
+        </label>
+      </div>
+    </section>
+
+    <!-- 7. Shared Trip Verification History -->
+    <section class="card" aria-labelledby="history-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="history-heading">יומן נסיעות ובדיקות משותף</h2>
+          <p class="section-sub">מתועד אוטומטית עבור שני בני הזוג</p>
+        </div>
+        <button type="button" id="clear-history-btn" class="btn-text">נקה יומן</button>
+      </div>
+      <ul id="history-list" class="history-list"></ul>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>מערכת עזר לבטיחות – אינה מחליפה אחריות הורית ובדיקה פיזית של הרכב בסיום כל נסיעה.</p>
+  </footer>
+
+  <!-- BLOCKING END-OF-TRIP ALARM DIALOG -->
+  <dialog id="alarm-dialog" closedby="none" aria-labelledby="alarm-title" aria-describedby="alarm-lock-warning">
+    <div class="alarm-shell">
+      <div id="broken-routine-banner" class="broken-routine-banner" hidden>
+        <strong>⚠️ שגרה שבורה! חנית בעבודה בלי עצירה בגן הבוקר!</strong>
+        <span>האם הילד/ה הורד/ה בגן? בדוק מיד את המושב האחורי!</span>
+      </div>
+
+      <div class="alarm-siren-header">
+        <span class="siren-pulse" aria-hidden="true">🚨</span>
+        <div>
+          <h2 id="alarm-title">עצרת את הרכב — בדוק את המושב האחורי!</h2>
+          <p id="alarm-children-reminder" class="alarm-children"></p>
+        </div>
+      </div>
+
+      <div id="alarm-stage-banner" class="alarm-stage-banner" role="status">
+        שלב השהיה שקט / אזעקה פעילה
+      </div>
+
+      <p id="alarm-lock-warning" class="alarm-lock-warning" role="status">
+        ההתרעה נעולה ולא תיכבה (גם בלחיצת Esc) עד לאימות הבדיקה למטה.
+      </p>
+
+      <div id="alarm-env-strip" class="alarm-meta-strip">
+        <span id="alarm-time-badge">שעת סיום: --:--</span>
+        <span id="alarm-temp-badge">🌡️ טמפ': בבדיקה</span>
+        <span id="alarm-vol-badge">🔊 ווליום 100% (ישוחזר ל-25%)</span>
+      </div>
+
+      <div id="escalation-box" class="escalation-box" hidden>
+        <div class="escalation-status">
+          <strong id="escalation-timer-text">התראת גיבוי לבן/בת הזוג בעוד 180 שניות</strong>
+          <small id="escalation-contact-preview"></small>
+        </div>
+        <div id="escalation-actions" class="escalation-actions" hidden>
+          <a id="call-partner-link" class="btn-escalate-call">חיוג מהיר לבדיקה</a>
+          <a id="whatsapp-escalate-link" class="btn-escalate-wa" target="_blank" rel="noopener noreferrer">
+            WhatsApp עם מיקום
+          </a>
+          <a id="sms-escalate-link" class="btn-escalate-sms">
+            SMS עם מיקום
+          </a>
+        </div>
+      </div>
+
+      <!-- Verification Challenge Area -->
+      <div id="verification-zone" class="verification-zone">
+        <!-- Mode 0: One-Thumb Giant Buttons (Recommended) -->
+        <div id="panel-onethumb" class="verify-panel" hidden>
+          <p id="onethumb-instruction" class="verify-hint verify-hint-lg"></p>
+          <div id="onethumb-progress" class="onethumb-progress">שלב 1 מתוך 2</div>
+          <div id="onethumb-grid" class="onethumb-grid"></div>
+        </div>
+
+        <!-- Mode 1: Hold + Physical Switch -->
+        <div id="panel-hold" class="verify-panel" hidden>
+          <label class="switch-row switch-row-urgent">
+            <span>
+              <strong>שלב 1: אני עומד/ת ליד הדלת האחורית</strong>
+              <small>פתחתי את הדלת ובדקתי את המושב האחורי בעיניים</small>
+            </span>
+            <input id="hold-physical-check" type="checkbox" switch>
+          </label>
+          <p id="hold-hint" class="verify-hint">הפעל קודם את המתג למעלה, ואז לחץ והחזק 3 שניות רצופות</p>
+          <div class="hold-btn-wrap">
+            <button type="button" id="hold-verify-btn" class="hold-verify-btn">
+              <svg class="hold-ring" viewBox="0 0 120 120" aria-hidden="true">
+                <circle class="hold-ring-track" cx="60" cy="60" r="52"></circle>
+                <circle id="hold-ring-fill" class="hold-ring-fill" cx="60" cy="60" r="52"></circle>
+              </svg>
+              <span class="hold-btn-label">
+                <strong id="hold-btn-title">לחץ והחזק 3 שניות</strong>
+                <small id="hold-btn-sub">לאישור שהרכב ריק</small>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Mode 2: Cognitive 4-Digit Random Challenge -->
+        <div id="panel-code" class="verify-panel" hidden>
+          <p class="verify-hint">הקלד את קוד הערנות הבא כדי להמשיך:</p>
+          <div id="challenge-code-display" class="challenge-code" dir="ltr" aria-live="polite">----</div>
+          <div id="code-dots" class="code-dots" dir="ltr" aria-label="ספרות שהוקלדו"></div>
+          <p id="code-error-msg" class="code-error" aria-live="assertive"></p>
+          <div id="shuffled-keypad" class="keypad-grid" dir="ltr"></div>
+        </div>
+
+        <!-- Mode 3: Back-Seat QR Code Scanner -->
+        <div id="panel-qr" class="verify-panel" hidden>
+          <p class="verify-hint">כוון את המצלמה למדבקת ה-QR המודבקת ליד כיסא התינוק:</p>
+          <div class="qr-scanner-frame">
+            <video id="qr-video" playsinline muted autoplay></video>
+            <div class="qr-reticle" aria-hidden="true"></div>
+          </div>
+          <p id="qr-scan-status" class="qr-status" aria-live="polite">מפעיל מצלמה אחורית...</p>
+          <div class="qr-fallback-actions">
+            <label class="btn-secondary file-scan-btn">
+              צלם מדבקה באמצעות המצלמה
+              <input id="qr-file-input" type="file" accept="image/*" capture="environment" hidden>
+            </label>
+            <button type="button" id="qr-fallback-code-btn" class="btn-text-light">
+              תקלה במצלמה? עבור לאימות ביד אחת
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Unlocked Outcome Choices (shown after challenge passes, plus Refuel always visible) -->
+      <div id="outcome-actions-box" class="outcome-actions-box">
+        <p id="outcome-lock-note" class="outcome-lock-note">
+          השלם את שלב האימות למעלה כדי לשחרר את כפתורי הסיום (או בחר "תדלוק" אם הילד עדיין ברכב):
+        </p>
+        <div id="final-outcomes-group" class="final-outcomes-group" hidden>
+          <button type="button" id="outcome-daycare-btn" class="btn-outcome-daycare">
+            👶 הורדתי בגן/ביעד – ממשיך לבד (השתק המשך נסיעה)
+          </button>
+          <button type="button" id="outcome-empty-btn" class="btn-outcome-empty">
+            ✅ הרכב נבדק וריק (סיום נסיעה רגיל)
+          </button>
+        </div>
+        <button type="button" id="outcome-refuel-btn" class="btn-outcome-refuel">
+          ⛽ תדלוק / עצירה קצרה (הילד ברכב – בדוק שוב בעוד 3 דק')
+        </button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- QR STICKER GENERATOR DIALOG -->
+  <dialog id="qr-dialog" closedby="any" aria-labelledby="qr-dialog-title">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="qr-dialog-title">מדבקת QR למושב האחורי</h2>
+        <form method="dialog">
+          <button type="submit" value="close" class="icon-close-btn" aria-label="סגור חלון">✕</button>
+        </form>
+      </div>
+      <p class="modal-desc">
+        הדפס מדבקה זו והדבק ליד כיסא הבטיחות מאחור. במצב סריקת QR האזעקה לא תיכבה עד שתיגש אחורה ותסרוק אותה.
+      </p>
+      <div id="printable-sticker" class="sticker-preview">
+        <div class="sticker-badge">שומר הילדים – בדיקת מושב אחורי</div>
+        <div id="sticker-qr-container" class="sticker-qr-box" aria-label="קוד QR לסריקה"></div>
+        <div class="sticker-footer">סרוק קוד זה כדי לאשר שאין ילד ברכב</div>
+        <code class="sticker-payload">CHILDGUARD-BACKSEAT-OK</code>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="download-qr-btn" class="btn-primary">הורד תמונת מדבקה (SVG)</button>
+        <button type="button" id="print-qr-btn" class="btn-secondary">הדפס מדבקה</button>
+        <form method="dialog">
+          <button type="submit" value="close" class="btn-text" autofocus>סגור</button>
+        </form>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- IPHONE & SHORTCUTS SETUP GUIDE DIALOG -->
+  <dialog id="shortcuts-dialog" closedby="any" aria-labelledby="shortcuts-dialog-title">
+    <div class="modal-card modal-card-wide">
+      <div class="modal-head">
+        <h2 id="shortcuts-dialog-title">חיבור אוטומטי לאייפון (מסך כבוי + אל-כשל)</h2>
+        <form method="dialog">
+          <button type="submit" value="close" class="icon-close-btn" aria-label="סגור חלון">✕</button>
+        </form>
+      </div>
+
+      <div class="guide-steps">
+        <article class="guide-step">
+          <h3>1. כניסה שקטה לרכב (Bluetooth / CarPlay מתחבר)</h3>
+          <p>באפליקציית <strong>קיצורי דרך (Shortcuts)</strong> באייפון: אוטומציה בעת חיבור לרכב ← בודקת אחוז סוללה (מתחת ל-15% מזהירה לחבר מטען), שומרת את הווליום הנוכחי, ומדווחת לשרת הזוגי בלי לעצור מוזיקה או שיחה:</p>
+          <div class="copy-url-row">
+            <code id="start-trigger-url" dir="ltr"></code>
+            <button type="button" class="btn-secondary btn-sm copy-btn" data-copy-target="start-trigger-url">העתק</button>
+          </div>
+        </article>
+
+        <article class="guide-step">
+          <h3>2. יציאה מהרכב (Bluetooth / CarPlay מתנתק – כשהמסך כבוי!)</h3>
+          <p>אוטומציה בעת התנתקות מהרכב ← ממתינה 60 שניות שקטות ← בודקת מול קישור ה-Pre-Beep Check האם כבר אושר או שמדובר בהמשך נסיעה מהגן/מצב מוסך ← ורק אם נדרש, מעלה ווליום ל-100%, מקריאה התרעה ופותחת את מסך האימות, ולבסוף משחזרת את הווליום הקודם:</p>
+          <div class="copy-url-row">
+            <code id="end-trigger-url" dir="ltr"></code>
+            <button type="button" class="btn-secondary btn-sm copy-btn" data-copy-target="end-trigger-url">העתק</button>
+          </div>
+          <p class="muted-small">קישור בדיקת Pre-Beep ל-Shortcuts (חוסך התרעות שווא):</p>
+          <div class="copy-url-row">
+            <code id="prebeep-check-url" dir="ltr"></code>
+            <button type="button" class="btn-secondary btn-sm copy-btn" data-copy-target="prebeep-check-url">העתק</button>
+          </div>
+        </article>
+
+        <article class="guide-step">
+          <h3>3. שיתוף קישור לנהג אורח (סבא / סבתא)</h3>
+          <p>כדי שסבא או סבתא ידווחו אוטומטית כשמסיימים נסיעה עם הילד, שלח להם את הקישור הבא:</p>
+          <div class="copy-url-row">
+            <code id="guest-driver-url" dir="ltr"></code>
+            <button type="button" class="btn-secondary btn-sm copy-btn" data-copy-target="guest-driver-url">העתק</button>
+          </div>
+        </article>
+      </div>
+
+      <div class="modal-actions">
+        <form method="dialog">
+          <button type="submit" value="close" class="btn-primary" autofocus>סגור מדריך</button>
+        </form>
+      </div>
+    </div>
+  </dialog>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

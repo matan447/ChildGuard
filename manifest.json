@@ -1,0 +1,33 @@
+{
+  "name": "שומר הילדים – ChildGuard",
+  "short_name": "שומר הילדים",
+  "description": "מערכת בטיחות חכמה למניעת שכחת ילדים ברכב עם זיהוי GPS אוטומטי והתרעה שאינה נכבית ללא בדיקה",
+  "lang": "he",
+  "dir": "rtl",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0f172a",
+  "background_color": "#0b1120",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
