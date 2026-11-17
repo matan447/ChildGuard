@@ -475,5 +475,71 @@ export async function onRequest(context) {
     });
   }
 
+  if (request.method === 'POST' && pathname === '/api/tts') {
+    const apiKey = env?.GEMINI_API_KEY;
+    if (!apiKey) {
+      return jsonResponse({ error: 'GEMINI_API_KEY is not configured' }, 503);
+    }
+    let payload = {};
+    try {
+      payload = await request.json();
+    } catch {
+      return jsonResponse({ error: 'בקשת JSON לא תקינה' }, 400);
+    }
+    const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 500) : '';
+    if (!text) {
+      return jsonResponse({ error: 'Missing text' }, 400);
+    }
+    const voice = payload.voice === 'Kore' ? 'Kore' : 'Aoede';
+    const style =
+      typeof payload.style === 'string' && payload.style.trim()
+        ? payload.style.trim()
+        : 'warm, clear, natural Israeli female voice speaking Hebrew';
+
+    const upstream = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
+      body: JSON.stringify({
+        model: 'gemini-3.8-flash-tts',
+        input: [
+          {
+            type: 'user_input',
+            content: [
+              {
+                type: 'text',
+                text,
+                annotations: [{ type: 'speech_metadata', style }]
+              }
+            ]
+          }
+        ],
+        response_format: { type: 'audio' },
+        generation_config: { speech_config: [{ voice }] }
+      })
+    });
+
+    const data = await upstream.json();
+    if (!upstream.ok) {
+      return jsonResponse({ error: data?.error?.message || 'Gemini TTS failed' }, upstream.status);
+    }
+    const outputs = data.steps?.filter((s) => s.type === 'model_output') || [];
+    let audioPart = null;
+    for (const out of outputs) {
+      const found = out.content?.find((c) => c.type === 'audio');
+      if (found?.data) audioPart = found;
+    }
+    if (!audioPart?.data) {
+      return jsonResponse({ error: 'No audio returned from Gemini TTS' }, 502);
+    }
+    return jsonResponse({
+      audioBase64: audioPart.data,
+      mimeType: audioPart.mime_type || 'audio/wav',
+      voice
+    });
+  }
+
   return jsonResponse({ error: 'API route not found' }, 404);
 }

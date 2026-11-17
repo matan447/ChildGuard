@@ -304,6 +304,7 @@ const DEFAULT_SETTINGS = {
   partnerName: 'דנה',
   guestName: 'סבא/סבתא',
   verificationMode: 'onethumb',
+  ttsVoice: 'Aoede',
   autoDetect: true,
   microTripFilter: true,
   voiceAlert: true,
@@ -337,6 +338,8 @@ const appState = {
   wakeLock: null,
   audioCtx: null,
   audioReady: false,
+  voiceAudio: null,
+  voiceObjectUrl: null,
   sirenInterval: null,
   speechInterval: null,
   vibrateInterval: null,
@@ -489,6 +492,8 @@ const els = {
   settingWakelock: document.getElementById('setting-wakelock'),
   settingEscalation: document.getElementById('setting-escalation'),
   settingNightQuiet: document.getElementById('setting-night-quiet'),
+  settingTtsVoice: document.getElementById('setting-tts-voice'),
+  testVoiceBtn: document.getElementById('test-voice-btn'),
   settingSpeedThreshold: document.getElementById('setting-speed-threshold'),
   settingStopDelay: document.getElementById('setting-stop-delay'),
   settingEscalationDelay: document.getElementById('setting-escalation-delay'),
@@ -733,17 +738,33 @@ function playSirenBurst() {
   }
 }
 
-function speakHebrewAlert(customText = null) {
-  if (!appState.settings.voiceAlert || !('speechSynthesis' in window)) return;
+const GEMINI_AUDIO_TRACKS = {
+  stop: './assets/audio/alert-stop.mp3',
+  'broken-routine': './assets/audio/alert-broken-routine.mp3',
+  'low-battery': './assets/audio/alert-low-battery.mp3',
+  heatwave: './assets/audio/alert-heatwave.mp3'
+};
+
+function stopVoicePlayback() {
+  if (appState.voiceAudio) {
+    try {
+      appState.voiceAudio.pause();
+      appState.voiceAudio.currentTime = 0;
+    } catch {
+      // Ignore
+    }
+  }
+  if (appState.voiceObjectUrl) {
+    URL.revokeObjectURL(appState.voiceObjectUrl);
+    appState.voiceObjectUrl = null;
+  }
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+}
+
+function playFallbackSpeechSynthesis(msg) {
+  if (!('speechSynthesis' in window)) return;
   try {
     window.speechSynthesis.cancel();
-    const aboardNames = getAboardChildren().map((c) => c.name);
-    const namesPart = aboardNames.length ? ` שימו לב ל${aboardNames.join(' ו')}.` : '';
-    const msg =
-      customText ||
-      (appState.brokenRoutine
-        ? `אזהרה! חנית בעבודה בלי עצירה בגן הבוקר! בדוק מיד את המושב האחורי.${namesPart}`
-        : `הנסיעה הסתיימה! בדוק את המושב האחורי.${namesPart}`);
     const utter = new SpeechSynthesisUtterance(msg);
     utter.lang = 'he-IL';
     utter.rate = 1.02;
@@ -751,6 +772,71 @@ function speakHebrewAlert(customText = null) {
   } catch {
     // Ignore
   }
+}
+
+async function playGeminiFemaleAlert(kind = null, customText = null) {
+  if (!appState.settings.voiceAlert) return;
+
+  const resolvedKind =
+    kind ||
+    (appState.brokenRoutine
+      ? 'broken-routine'
+      : appState.ambientTempC >= 28
+        ? 'heatwave'
+        : 'stop');
+  const staticUrl = GEMINI_AUDIO_TRACKS[resolvedKind] || GEMINI_AUDIO_TRACKS.stop;
+  const fallbackText =
+    customText ||
+    (resolvedKind === 'broken-routine'
+      ? 'אזהרה דחופה! חניתם בעבודה ללא עצירה בגן הבוקר! בדקו מיד את המושב האחורי!'
+      : resolvedKind === 'heatwave'
+        ? 'אזהרת חום קיצוני! בדקו מיד את המושב האחורי ואשרו שהרכב ריק!'
+        : resolvedKind === 'low-battery'
+          ? 'שימו לב, הסוללה בטלפון חלשה. חברו למטען הרכב.'
+          : 'הנסיעה הסתיימה! בדקו את המושב האחורי.');
+
+  stopVoicePlayback();
+
+  const selectedVoice = appState.settings.ttsVoice || 'Aoede';
+  let audioSrc = staticUrl;
+
+  if ((selectedVoice !== 'Aoede' || customText) && navigator.onLine) {
+    try {
+      const res = await fetch('./api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: fallbackText, voice: selectedVoice })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.audioBase64) {
+          const bin = atob(data.audioBase64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const blob = new Blob([bytes], { type: data.mimeType || 'audio/wav' });
+          appState.voiceObjectUrl = URL.createObjectURL(blob);
+          audioSrc = appState.voiceObjectUrl;
+        }
+      }
+    } catch {
+      // Fall back to pre-generated Gemini TTS MP3 file
+    }
+  }
+
+  try {
+    if (!appState.voiceAudio) {
+      appState.voiceAudio = new Audio();
+      appState.voiceAudio.preload = 'auto';
+    }
+    appState.voiceAudio.src = audioSrc;
+    await appState.voiceAudio.play();
+  } catch {
+    playFallbackSpeechSynthesis(fallbackText);
+  }
+}
+
+function speakHebrewAlert(customText = null) {
+  playGeminiFemaleAlert(null, customText);
 }
 
 function triggerSystemNotification() {
@@ -809,7 +895,7 @@ function stopAlarmOutputs() {
   appState.sirenInterval = null;
   appState.speechInterval = null;
   appState.vibrateInterval = null;
-  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  stopVoicePlayback();
   if ('vibrate' in navigator) navigator.vibrate(0);
 }
 
@@ -1817,10 +1903,9 @@ async function runDemoMicroTrip() {
 
 function runDemoLowBattery() {
   unlockAudio();
-  const msg = 'שים לב! הסוללה באייפון על 9 אחוז. חבר עכשיו למטען הרכב כדי שההתרעה תעבוד בסיום הנסיעה.';
-  speakHebrewAlert(msg);
+  playGeminiFemaleAlert('low-battery');
   showDemoFeedback(
-    '<strong>🪫 תרחיש 5 – כניסה לרכב עם 9% סוללה:</strong> האייפון בדק סוללה בחיבור הבלוטות\', זיהה <strong>9%</strong> (מתחת ל-15%), השמיע התראה לחיבור מטען והפעיל טיימר "דופק" של 60 דקות בשרת לגיבוי מול בת הזוג.',
+    '<strong>🪫 תרחיש 5 – כניסה לרכב עם 9% סוללה:</strong> האייפון בדק סוללה בחיבור הבלוטות\', זיהה <strong>9%</strong> (מתחת ל-15%), השמיע התראה בקול נשי (Gemini TTS) לחיבור מטען והפעיל טיימר "דופק" של 60 דקות בשרת לגיבוי מול בת הזוג.',
     'warn'
   );
 }
@@ -2178,6 +2263,7 @@ function renderSettingsControls() {
   els.settingWakelock.checked = appState.settings.keepAwake;
   els.settingEscalation.checked = appState.settings.escalationEnabled;
   els.settingNightQuiet.checked = appState.settings.nightQuietEnabled;
+  els.settingTtsVoice.value = appState.settings.ttsVoice || 'Aoede';
   els.settingSpeedThreshold.value = String(appState.settings.speedThresholdKmh);
   els.settingStopDelay.value = String(appState.settings.stopDelaySeconds);
   els.settingEscalationDelay.value = String(appState.settings.escalationDelaySeconds);
@@ -2452,6 +2538,19 @@ function bindEvents() {
   els.settingNightQuiet.addEventListener('change', () => {
     appState.settings.nightQuietEnabled = els.settingNightQuiet.checked;
     saveSettings();
+  });
+  els.settingTtsVoice.addEventListener('change', () => {
+    appState.settings.ttsVoice = els.settingTtsVoice.value;
+    saveSettings();
+  });
+  els.testVoiceBtn.addEventListener('click', async () => {
+    unlockAudio();
+    const prevText = els.testVoiceBtn.textContent;
+    els.testVoiceBtn.textContent = '🔊 משמיע קול נשי (Gemini TTS)...';
+    await playGeminiFemaleAlert('stop');
+    setTimeout(() => {
+      els.testVoiceBtn.textContent = prevText;
+    }, 2000);
   });
   els.settingSpeedThreshold.addEventListener('change', () => {
     appState.settings.speedThresholdKmh = Number(els.settingSpeedThreshold.value);

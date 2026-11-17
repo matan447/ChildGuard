@@ -16,8 +16,30 @@ const MIME_TYPES = {
   '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml; charset=utf-8',
   '.png': 'image/png',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
   '.ico': 'image/x-icon'
 };
+
+function loadGeminiApiKey() {
+  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY.trim();
+  const candidates = [
+    path.join(ROOT_DIR, '.env'),
+    path.resolve(ROOT_DIR, '..', 'nettobox', '.env')
+  ];
+  for (const envPath of candidates) {
+    if (fs.existsSync(envPath)) {
+      try {
+        const content = fs.readFileSync(envPath, 'utf8');
+        const match = content.match(/^GEMINI_API_KEY=(.+)$/m);
+        if (match && match[1].trim()) return match[1].trim();
+      } catch {
+        // Ignore unreadable .env
+      }
+    }
+  }
+  return '';
+}
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
@@ -233,6 +255,78 @@ function handleApi(req, res, reqUrl) {
       restoreVolumePct: cs.savedVolumePct ?? 25,
       state: cs.state
     });
+    return true;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/tts') {
+    readJsonBody(req)
+      .then(async (payload) => {
+        const apiKey = loadGeminiApiKey();
+        if (!apiKey) {
+          sendJson(res, 503, { error: 'GEMINI_API_KEY is not configured' });
+          return;
+        }
+        const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 500) : '';
+        if (!text) {
+          sendJson(res, 400, { error: 'Missing text' });
+          return;
+        }
+        const voice = payload.voice === 'Kore' ? 'Kore' : 'Aoede';
+        const style =
+          typeof payload.style === 'string' && payload.style.trim()
+            ? payload.style.trim()
+            : 'warm, clear, natural Israeli female voice speaking Hebrew';
+
+        const upstream = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey
+          },
+          body: JSON.stringify({
+            model: 'gemini-3.8-flash-tts',
+            input: [
+              {
+                type: 'user_input',
+                content: [
+                  {
+                    type: 'text',
+                    text,
+                    annotations: [{ type: 'speech_metadata', style }]
+                  }
+                ]
+              }
+            ],
+            response_format: { type: 'audio' },
+            generation_config: { speech_config: [{ voice }] }
+          })
+        });
+
+        const data = await upstream.json();
+        if (!upstream.ok) {
+          sendJson(res, upstream.status, { error: data?.error?.message || 'Gemini TTS failed' });
+          return;
+        }
+
+        const outputs = data.steps?.filter((s) => s.type === 'model_output') || [];
+        let audioPart = null;
+        for (const out of outputs) {
+          const found = out.content?.find((c) => c.type === 'audio');
+          if (found?.data) audioPart = found;
+        }
+        if (!audioPart?.data) {
+          sendJson(res, 502, { error: 'No audio returned from Gemini TTS' });
+          return;
+        }
+        sendJson(res, 200, {
+          audioBase64: audioPart.data,
+          mimeType: audioPart.mime_type || 'audio/wav',
+          voice
+        });
+      })
+      .catch(() => {
+        sendJson(res, 500, { error: 'TTS request error' });
+      });
     return true;
   }
 
