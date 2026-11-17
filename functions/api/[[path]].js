@@ -1,4 +1,70 @@
+const FIREBASE_PROJECT_ID = 'child-guard-e0744';
+const FIREBASE_API_KEY = 'AIzaSyAnmp4FhIY5JlFk0Zis7fMbY5r7VGmmGqY';
+
 let memoryFallbackState = null;
+
+function sanitizePin(raw) {
+  const cleaned = String(raw || '1234').replace(/[^A-Za-z0-9_-]/g, '');
+  return cleaned.length >= 4 ? cleaned.slice(0, 24) : '1234';
+}
+
+function firestoreDocUrl(pin) {
+  const safePin = sanitizePin(pin);
+  return `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/families/family_${safePin}?key=${FIREBASE_API_KEY}`;
+}
+
+function toFirestoreValue(val) {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') {
+    return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+  }
+  if (typeof val === 'string') return { stringValue: val };
+  if (Array.isArray(val)) return { arrayValue: { values: val.map(toFirestoreValue) } };
+  if (typeof val === 'object') {
+    const fields = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (v !== undefined) fields[k] = toFirestoreValue(v);
+    }
+    return { mapValue: { fields } };
+  }
+  return { stringValue: String(val) };
+}
+
+function fromFirestoreValue(fv) {
+  if (!fv || typeof fv !== 'object') return null;
+  if ('nullValue' in fv) return null;
+  if ('booleanValue' in fv) return Boolean(fv.booleanValue);
+  if ('integerValue' in fv) return Number(fv.integerValue);
+  if ('doubleValue' in fv) return Number(fv.doubleValue);
+  if ('stringValue' in fv) return fv.stringValue;
+  if ('timestampValue' in fv) return fv.timestampValue;
+  if ('arrayValue' in fv) {
+    return (fv.arrayValue.values || []).map(fromFirestoreValue);
+  }
+  if ('mapValue' in fv) {
+    const out = {};
+    for (const [k, v] of Object.entries(fv.mapValue.fields || {})) {
+      out[k] = fromFirestoreValue(v);
+    }
+    return out;
+  }
+  return null;
+}
+
+function buildFirestoreFields(state) {
+  const cleanPayload = {
+    dayKey: state.dayKey,
+    profiles: state.profiles,
+    coupleStatus: state.coupleStatus,
+    pickupToday: state.pickupToday,
+    savedPlaces: state.savedPlaces,
+    history: state.history,
+    updatedAt: new Date().toISOString(),
+    pinConfigured: true
+  };
+  return toFirestoreValue(cleanPayload).mapValue.fields;
+}
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
@@ -49,13 +115,26 @@ function createDefaultState() {
   };
 }
 
-async function loadState(env) {
+async function loadState(env, pin = '1234') {
   let state = null;
   if (env?.CHILDGUARD_KV) {
     try {
-      state = await env.CHILDGUARD_KV.get('family_state', 'json');
+      state = await env.CHILDGUARD_KV.get(`family_state_${sanitizePin(pin)}`, 'json');
     } catch {
       state = null;
+    }
+  }
+  if (!state) {
+    try {
+      const res = await fetch(firestoreDocUrl(pin));
+      if (res.ok) {
+        const docJson = await res.json();
+        if (docJson?.fields) {
+          state = fromFirestoreValue({ mapValue: { fields: docJson.fields } });
+        }
+      }
+    } catch {
+      // Fall back to isolate memory if Firestore isn't ready yet
     }
   }
   if (!state) {
@@ -76,14 +155,23 @@ async function loadState(env) {
   return normalized;
 }
 
-async function saveState(env, state) {
+async function saveState(env, state, pin = '1234') {
   memoryFallbackState = state;
   if (env?.CHILDGUARD_KV) {
     try {
-      await env.CHILDGUARD_KV.put('family_state', JSON.stringify(state));
+      await env.CHILDGUARD_KV.put(`family_state_${sanitizePin(pin)}`, JSON.stringify(state));
     } catch {
-      // Ignore KV write failure and retain isolate memory
+      // Ignore KV write failure
     }
+  }
+  try {
+    await fetch(firestoreDocUrl(pin), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: buildFirestoreFields(state) })
+    });
+  } catch {
+    // Ignore if Firestore DB is not yet provisioned
   }
 }
 
@@ -169,10 +257,11 @@ export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const pathname = url.pathname;
+  const reqPin = sanitizePin(request.headers.get('x-family-key') || url.searchParams.get('pin') || '1234');
 
-  const familyState = await loadState(env);
+  const familyState = await loadState(env, reqPin);
   if (cleanExpiredTimers(familyState)) {
-    await saveState(env, familyState);
+    await saveState(env, familyState, reqPin);
   }
 
   if (request.method === 'GET' && pathname === '/api/state') {
@@ -467,7 +556,8 @@ export async function onRequest(context) {
         return jsonResponse({ error: 'סוג אירוע לא מוכר' }, 400);
     }
 
-    await saveState(env, familyState);
+    const savePin = payload.type === 'UPDATE_PIN' && payload.newPin ? sanitizePin(payload.newPin) : reqPin;
+    await saveState(env, familyState, savePin);
     return jsonResponse({
       ok: true,
       meta,

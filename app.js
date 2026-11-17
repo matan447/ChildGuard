@@ -1,3 +1,5 @@
+import { FIREBASE_CONFIG } from './firebase-config.js';
+
 // Conditional polyfills per modern-web-guidance
 if (!('switch' in HTMLInputElement.prototype)) {
   import('https://esm.sh/input-switch-polyfill').catch(() => {});
@@ -454,6 +456,7 @@ const els = {
   // Monitor
   statusPill: document.getElementById('status-pill'),
   statusLabel: document.getElementById('status-label'),
+  firebaseBadge: document.getElementById('firebase-badge'),
   tempBadge: document.getElementById('temp-badge'),
   audioBadge: document.getElementById('audio-badge'),
   wakelockBadge: document.getElementById('wakelock-badge'),
@@ -572,36 +575,230 @@ function getCurrentDriverName() {
   return `אני (${myName || 'אלון'})`;
 }
 
+function sanitizeFamilyPin(raw) {
+  const cleaned = String(raw || '1234').replace(/[^A-Za-z0-9_-]/g, '');
+  return cleaned.length >= 4 ? cleaned.slice(0, 24) : '1234';
+}
+
+function buildSeedCoupleState() {
+  return {
+    dayKey: new Date().toISOString().slice(0, 10),
+    profiles: {
+      myName: appState.settings.myName || 'אלון',
+      partnerName: appState.settings.partnerName || 'דנה',
+      guestName: appState.settings.guestName || 'סבא/סבתא'
+    },
+    coupleStatus: {
+      state: 'IDLE',
+      driverName: getCurrentDriverName(),
+      statusText: 'ממתין לנסיעה הראשונה היום',
+      updatedAt: new Date().toISOString(),
+      lastVerifiedAt: appState.lastVerifiedAt || 0,
+      soloContinueUntil: 0,
+      snoozeUntil: 0,
+      refuelUntil: 0,
+      droppedOffAtDaycareToday: false,
+      brokenRoutineAlert: false,
+      tempC: appState.ambientTempC,
+      savedVolumePct: appState.settings.savedVolumePct ?? 25
+    },
+    pickupToday: {
+      assignee: 'אני',
+      updatedAt: new Date().toISOString(),
+      updatedBy: getCurrentDriverName()
+    },
+    savedPlaces: appState.settings.savedPlaces || DEFAULT_SETTINGS.savedPlaces,
+    history: appState.history || []
+  };
+}
+
+function applyRemoteState(data) {
+  if (!data || typeof data !== 'object') return;
+  appState.coupleState = data;
+  if (data.profiles && (data.profiles.myName !== 'אלון' || data.profiles.partnerName !== 'דנה' || data.profiles.guestName !== 'סבא/סבתא')) {
+    const namesBox = document.getElementById('couple-names-box');
+    if (!namesBox || !namesBox.contains(document.activeElement)) {
+      appState.settings.myName = data.profiles.myName || appState.settings.myName;
+      appState.settings.partnerName = data.profiles.partnerName || appState.settings.partnerName;
+      appState.settings.guestName = data.profiles.guestName || appState.settings.guestName;
+      saveSettings();
+      renderSettingsControls();
+    }
+  }
+  if (Array.isArray(data.savedPlaces) && data.savedPlaces.length > 0) {
+    appState.settings.savedPlaces = data.savedPlaces;
+    saveSettings();
+  }
+  if (Array.isArray(data.history) && data.history.length > 0) {
+    appState.history = data.history;
+    saveHistory();
+  }
+  renderCoupleCard();
+  renderPlaces();
+  renderHistory();
+}
+
 // ============================================================================
-// Couple Sync API Client (with Offline Fail-Safe)
+// Firebase Real-Time Firestore Sync
+// ============================================================================
+const firebaseSync = {
+  db: null,
+  docRef: null,
+  unsub: null,
+  setDocFn: null,
+  ready: false,
+  lastPushedAt: ''
+};
+
+async function syncToFirestore(stateObj) {
+  if (!firebaseSync.docRef || !firebaseSync.setDocFn || !stateObj) return;
+  try {
+    const seed = buildSeedCoupleState();
+    const cs = stateObj.coupleStatus || seed.coupleStatus;
+    const pt = stateObj.pickupToday || seed.pickupToday;
+    const cleanPlaces = (Array.isArray(stateObj.savedPlaces) ? stateObj.savedPlaces : seed.savedPlaces)
+      .slice(0, 20)
+      .map((p) => ({
+        id: String(p.id || 'place').slice(0, 48),
+        icon: String(p.icon || '📍').slice(0, 16),
+        name: String(p.name || 'מקום').slice(0, 64),
+        address: String(p.address || '').slice(0, 200),
+        lat: Number(p.lat) || 32.0853,
+        lon: Number(p.lon) || 34.7818,
+        radiusM: Math.min(10000, Math.max(10, Number(p.radiusM) || 150))
+      }));
+    const cleanHistory = (Array.isArray(stateObj.history) ? stateObj.history : [])
+      .slice(0, 40)
+      .map((h) => ({
+        id: String(h.id || Date.now()).slice(0, 48),
+        endedAt: String(h.endedAt || new Date().toISOString()).slice(0, 64),
+        driverName: String(h.driverName || 'נהג').slice(0, 80),
+        method: String(h.method || 'אימות מהיר').slice(0, 80),
+        reason: String(h.reason || 'סיום נסיעה').slice(0, 240),
+        maxSpeedKmh: Math.min(400, Math.max(0, Number(h.maxSpeedKmh) || 0)),
+        children: Array.isArray(h.children) ? h.children.slice(0, 12).map((c) => String(c).slice(0, 40)) : [],
+        outcome: h.outcome === 'DAYCARE_SOLO' ? 'DAYCARE_SOLO' : 'EMPTY'
+      }));
+
+    const payload = {
+      dayKey: String(stateObj.dayKey || seed.dayKey).slice(0, 16),
+      profiles: {
+        myName: String(stateObj.profiles?.myName || seed.profiles.myName).slice(0, 64),
+        partnerName: String(stateObj.profiles?.partnerName || seed.profiles.partnerName).slice(0, 64),
+        guestName: String(stateObj.profiles?.guestName || seed.profiles.guestName).slice(0, 64)
+      },
+      coupleStatus: {
+        state: String(cs.state || 'IDLE').slice(0, 40),
+        driverName: String(cs.driverName || seed.coupleStatus.driverName).slice(0, 80),
+        statusText: String(cs.statusText || '').slice(0, 300),
+        updatedAt: String(cs.updatedAt || new Date().toISOString()).slice(0, 64),
+        lastVerifiedAt: Math.max(0, Number(cs.lastVerifiedAt) || 0),
+        soloContinueUntil: Math.max(0, Number(cs.soloContinueUntil) || 0),
+        snoozeUntil: Math.max(0, Number(cs.snoozeUntil) || 0),
+        refuelUntil: Math.max(0, Number(cs.refuelUntil) || 0),
+        droppedOffAtDaycareToday: Boolean(cs.droppedOffAtDaycareToday),
+        brokenRoutineAlert: Boolean(cs.brokenRoutineAlert),
+        tempC: cs.tempC === null || cs.tempC === undefined ? null : Math.min(100, Math.max(-60, Number(cs.tempC))),
+        savedVolumePct:
+          cs.savedVolumePct === null || cs.savedVolumePct === undefined
+            ? 25
+            : Math.min(100, Math.max(0, Number(cs.savedVolumePct)))
+      },
+      pickupToday: {
+        assignee: String(pt.assignee || 'אני').slice(0, 64),
+        updatedAt: String(pt.updatedAt || new Date().toISOString()).slice(0, 64),
+        updatedBy: String(pt.updatedBy || seed.pickupToday.updatedBy).slice(0, 80)
+      },
+      savedPlaces: cleanPlaces,
+      history: cleanHistory,
+      updatedAt: new Date().toISOString(),
+      pinConfigured: true
+    };
+    firebaseSync.lastPushedAt = payload.updatedAt;
+    await firebaseSync.setDocFn(firebaseSync.docRef, payload, { merge: true });
+    if (els.firebaseBadge) {
+      els.firebaseBadge.dataset.ready = 'true';
+      els.firebaseBadge.textContent = '☁️ Firebase מסונכרן חי ✓';
+    }
+  } catch {
+    // Firestore may still be unprovisioned or offline
+  }
+}
+
+async function initFirebaseSync() {
+  if (!FIREBASE_CONFIG?.apiKey || !FIREBASE_CONFIG?.projectId) {
+    if (els.firebaseBadge) {
+      els.firebaseBadge.dataset.ready = 'false';
+      els.firebaseBadge.textContent = '☁️ Firebase לא מוגדר';
+    }
+    return;
+  }
+
+  try {
+    if (firebaseSync.unsub) {
+      firebaseSync.unsub();
+      firebaseSync.unsub = null;
+    }
+
+    const [{ initializeApp, getApps }, { getFirestore, doc, onSnapshot, setDoc }] = await Promise.all([
+      import('https://www.gstatic.com/firebasejs/11.3.1/firebase-app.js'),
+      import('https://www.gstatic.com/firebasejs/11.3.1/firebase-firestore.js')
+    ]);
+
+    const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
+    const db = getFirestore(app);
+    const pin = sanitizeFamilyPin(appState.settings.familyPin);
+    const docRef = doc(db, 'families', `family_${pin}`);
+
+    firebaseSync.db = db;
+    firebaseSync.docRef = docRef;
+    firebaseSync.setDocFn = setDoc;
+
+    firebaseSync.unsub = onSnapshot(
+      docRef,
+      (snap) => {
+        firebaseSync.ready = true;
+        if (els.firebaseBadge) {
+          els.firebaseBadge.dataset.ready = 'true';
+          els.firebaseBadge.textContent = '☁️ Firebase מסונכרן חי ✓';
+        }
+        if (snap.exists()) {
+          const remote = snap.data();
+          if (remote?.updatedAt && remote.updatedAt === firebaseSync.lastPushedAt) return;
+          applyRemoteState(remote);
+        } else {
+          syncToFirestore(appState.coupleState || buildSeedCoupleState());
+        }
+      },
+      (err) => {
+        firebaseSync.ready = false;
+        if (els.firebaseBadge) {
+          els.firebaseBadge.dataset.ready = 'false';
+          els.firebaseBadge.textContent =
+            err?.code === 'permission-denied' || err?.code === 'failed-precondition'
+              ? '☁️ Firebase: הפעל Firestore בקונסול'
+              : '☁️ Firebase: מצב מקומי';
+        }
+      }
+    );
+  } catch {
+    if (els.firebaseBadge) {
+      els.firebaseBadge.dataset.ready = 'false';
+      els.firebaseBadge.textContent = '☁️ Firebase: אופליין';
+    }
+  }
+}
+
+// ============================================================================
+// Couple Sync API Client (with Offline Fail-Safe + Firestore Push)
 // ============================================================================
 async function apiFetchState() {
   try {
-    const res = await fetch('./api/state', { cache: 'no-store' });
+    const pin = sanitizeFamilyPin(appState.settings.familyPin);
+    const res = await fetch(`./api/state?pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
     if (!res.ok) return null;
     const data = await res.json();
-    appState.coupleState = data;
-    if (data.profiles && (data.profiles.myName !== 'אלון' || data.profiles.partnerName !== 'דנה' || data.profiles.guestName !== 'סבא/סבתא')) {
-      const namesBox = document.getElementById('couple-names-box');
-      if (!namesBox || !namesBox.contains(document.activeElement)) {
-        appState.settings.myName = data.profiles.myName || appState.settings.myName;
-        appState.settings.partnerName = data.profiles.partnerName || appState.settings.partnerName;
-        appState.settings.guestName = data.profiles.guestName || appState.settings.guestName;
-        saveSettings();
-        renderSettingsControls();
-      }
-    }
-    if (Array.isArray(data.savedPlaces) && data.savedPlaces.length > 0) {
-      appState.settings.savedPlaces = data.savedPlaces;
-      saveSettings();
-    }
-    if (Array.isArray(data.history) && data.history.length > 0) {
-      appState.history = data.history;
-      saveHistory();
-    }
-    renderCoupleCard();
-    renderPlaces();
-    renderHistory();
+    applyRemoteState(data);
     return data;
   } catch {
     return null;
@@ -614,7 +811,7 @@ async function apiPostEvent(type, payload = {}) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Family-Key': appState.settings.familyPin || '1234'
+        'X-Family-Key': sanitizeFamilyPin(appState.settings.familyPin)
       },
       body: JSON.stringify({
         type,
@@ -626,18 +823,8 @@ async function apiPostEvent(type, payload = {}) {
     if (!res.ok) return null;
     const data = await res.json();
     if (data.state) {
-      appState.coupleState = data.state;
-      if (Array.isArray(data.state.savedPlaces)) {
-        appState.settings.savedPlaces = data.state.savedPlaces;
-        saveSettings();
-      }
-      if (Array.isArray(data.state.history)) {
-        appState.history = data.state.history;
-        saveHistory();
-      }
-      renderCoupleCard();
-      renderPlaces();
-      renderHistory();
+      applyRemoteState(data.state);
+      syncToFirestore(data.state);
     }
     return data;
   } catch {
@@ -2574,9 +2761,11 @@ function bindEvents() {
     saveSettings();
   });
   els.familyPinInput.addEventListener('change', async () => {
-    appState.settings.familyPin = els.familyPinInput.value.trim() || '1234';
+    appState.settings.familyPin = sanitizeFamilyPin(els.familyPinInput.value);
+    els.familyPinInput.value = appState.settings.familyPin;
     saveSettings();
     await apiPostEvent('UPDATE_PIN', { newPin: appState.settings.familyPin });
+    initFirebaseSync();
   });
 
   els.clearHistoryBtn.addEventListener('click', async () => {
@@ -2705,7 +2894,8 @@ async function init() {
   setStatus('IDLE');
 
   await apiFetchState();
-  // Live couple sync poll every 8 seconds
+  initFirebaseSync();
+  // Live couple sync poll every 8 seconds (complementing Firestore onSnapshot)
   appState.pollTimer = setInterval(apiFetchState, 8000);
   await handleDeepLinkParams();
 }

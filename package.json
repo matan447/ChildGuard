@@ -1,0 +1,25 @@
+{
+  "name": "child-guard",
+  "version": "1.0.0",
+  "description": "מערכת בטיחות חכמה למניעת שכחת ילדים ברכב, מותאמת לאייפון (Shortcuts + PWA) עם סנכרון זוגי בזמן אמת, מניעת התרעות שווא והתרעות שלא נכבות ללא בדיקה.",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matan447/ChildGuard.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/matan447/ChildGuard/issues"
+  },
+  "homepage": "https://github.com/matan447/ChildGuard#readme",
+  "dependencies": {
+    "firebase": "^13.4.0"
+  }
+}
