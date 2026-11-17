@@ -3,234 +3,104 @@ rules_version = '2';
 // ============================================================================
 // Assumed Data Model (ChildGuard - child-guard-e0744)
 // ============================================================================
-//
-// Collection: families
-// Document ID: family_<PIN> matching ^family_[A-Za-z0-9_-]{4,24}$
-// Access Model:
-//   Explicitly unauthenticated capability-ID access for two partners' iPhones
-//   and Cloudflare Pages Functions REST API using the shared secret family PIN
-//   as the document ID suffix. List queries and deletes are strictly disabled
-//   to prevent document enumeration and state wiping.
-//
-// Fields (families/{familyDocId}):
-//   - dayKey: string (optional, <= 16 chars) - Current ISO date key (YYYY-MM-DD)
-//   - profiles: map (optional) - Partner and guest driver display names:
-//       - myName: string (optional, <= 64 chars)
-//       - partnerName: string (optional, <= 64 chars)
-//       - guestName: string (optional, <= 64 chars)
-//   - coupleStatus: map (required) - Live vehicle safety state:
-//       - state: string (required, 1..40 chars)
-//       - driverName: string (optional, <= 80 chars)
-//       - statusText: string (optional, <= 300 chars)
-//       - updatedAt: string (1..64 chars) | timestamp (optional)
-//       - lastVerifiedAt: number (optional, >= 0)
-//       - soloContinueUntil: number (optional, >= 0)
-//       - snoozeUntil: number (optional, >= 0)
-//       - refuelUntil: number (optional, >= 0)
-//       - droppedOffAtDaycareToday: bool (optional)
-//       - brokenRoutineAlert: bool (optional)
-//       - tempC: number (-60..100) | null (optional)
-//       - savedVolumePct: number (0..100) | null (optional)
-//   - pickupToday: map (required) - Daily daycare pickup assignment:
-//       - assignee: string (required, 1..64 chars)
-//       - updatedAt: string (1..64 chars) | timestamp (optional)
-//       - updatedBy: string (optional, <= 80 chars)
-//   - savedPlaces: list (required, <= 20 items) - Geofenced family places:
-//       - item: map { id, icon?, name, address?, lat, lon, radiusM? }
-//   - history: list (required, <= 50 items) - Recent trip verification entries:
-//       - item: map { id, endedAt, driverName?, method?, reason?, maxSpeedKmh?, children?, outcome }
-//   - updatedAt: string (1..64 chars) | timestamp (optional) - Last sync time
-//   - pinConfigured: bool (optional) - Indicates family PIN is configured
-//
-// All other collections and subcollections are denied by default.
+// Collection: families/{familyDocId}
+//   - Document ID: family_<PIN> matching ^family_[A-Za-z0-9_-]{4,24}$
+//   - Access: Shared secret PIN capability model (no login screen) for
+//     two partners' iPhones and Cloudflare Pages Functions REST API.
+//     List queries and deletes are explicitly blocked.
+//   - Required fields: coupleStatus, pickupToday, savedPlaces (<=20), history (<=50)
+//   - Optional fields: dayKey (<=16), profiles, updatedAt (ts/str<=64), pinConfigured (bool)
 // ============================================================================
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ========================================================================
-    // Helper Functions
-    // ========================================================================
-
-    // Standard auth/ownership helpers (reserved for future Auth hardening)
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    function uidUnchanged() {
-      return !('uid' in request.resource.data) ||
-        request.resource.data.uid == request.auth.uid;
-    }
-
-    function uidNotModified() {
-      return !('uid' in request.resource.data) ||
-        request.resource.data.uid == resource.data.uid;
-    }
-
-    // Schema & field validation helpers
-    function hasRequiredFields(fields) {
-      return request.resource.data.keys().hasAll(fields);
-    }
-
-    function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
-    }
-
-    function areImmutableFieldsUnchanged(fields) {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
-    }
-
-    function isValidList(listVal, maxSize) {
-      return listVal is list && listVal.size() <= maxSize;
-    }
-
-    function isValidMap(mapData, allowedKeys) {
-      return mapData is map && mapData.keys().hasOnly(allowedKeys);
-    }
-
-    function isValidOptionalString(data, field, minLen, maxLen) {
-      return !(field in data) ||
-        (data[field] is string &&
-         data[field].size() >= minLen &&
-         data[field].size() <= maxLen);
-    }
-
-    function isValidTimestampOrString(val) {
-      return val is timestamp ||
-        (val is string && val.size() > 0 && val.size() <= 64);
-    }
-
-    // ========================================================================
-    // Domain Validators (ChildGuard)
-    // ========================================================================
-
-    // Enforce shared secret family_<PIN> document ID format (no wildcards/traversal)
     function isValidFamilyDocId(familyDocId) {
       return familyDocId.matches('^family_[A-Za-z0-9_-]{4,24}$');
     }
 
-    function isValidProfiles(profiles) {
-      return isValidMap(profiles, ['myName', 'partnerName', 'guestName']) &&
-        isValidOptionalString(profiles, 'myName', 0, 64) &&
-        isValidOptionalString(profiles, 'partnerName', 0, 64) &&
-        isValidOptionalString(profiles, 'guestName', 0, 64);
+    function isValidProfiles(p) {
+      return p is map &&
+        p.keys().hasOnly(['myName', 'partnerName', 'guestName']) &&
+        (!('myName' in p) || (p.myName is string && p.myName.size() <= 64)) &&
+        (!('partnerName' in p) || (p.partnerName is string && p.partnerName.size() <= 64)) &&
+        (!('guestName' in p) || (p.guestName is string && p.guestName.size() <= 64));
     }
 
     function isValidCoupleStatus(cs) {
-      return isValidMap(cs, [
+      return cs is map &&
+        cs.keys().hasAll(['state']) &&
+        cs.keys().hasOnly([
           'state', 'driverName', 'statusText', 'updatedAt',
           'lastVerifiedAt', 'soloContinueUntil', 'snoozeUntil', 'refuelUntil',
           'droppedOffAtDaycareToday', 'brokenRoutineAlert', 'tempC', 'savedVolumePct'
         ]) &&
-        cs.keys().hasAll(['state']) &&
         cs.state is string && cs.state.size() > 0 && cs.state.size() <= 40 &&
-        isValidOptionalString(cs, 'driverName', 0, 80) &&
-        isValidOptionalString(cs, 'statusText', 0, 300) &&
-        (!('updatedAt' in cs) || isValidTimestampOrString(cs.updatedAt)) &&
-        (!('lastVerifiedAt' in cs) || (cs.lastVerifiedAt is number && cs.lastVerifiedAt >= 0)) &&
-        (!('soloContinueUntil' in cs) || (cs.soloContinueUntil is number && cs.soloContinueUntil >= 0)) &&
-        (!('snoozeUntil' in cs) || (cs.snoozeUntil is number && cs.snoozeUntil >= 0)) &&
-        (!('refuelUntil' in cs) || (cs.refuelUntil is number && cs.refuelUntil >= 0)) &&
-        (!('droppedOffAtDaycareToday' in cs) || cs.droppedOffAtDaycareToday is bool) &&
-        (!('brokenRoutineAlert' in cs) || cs.brokenRoutineAlert is bool) &&
-        (!('tempC' in cs) || cs.tempC == null || (cs.tempC is number && cs.tempC >= -60 && cs.tempC <= 100)) &&
-        (!('savedVolumePct' in cs) || cs.savedVolumePct == null || (cs.savedVolumePct is number && cs.savedVolumePct >= 0 && cs.savedVolumePct <= 100));
+        (!('driverName' in cs) || (cs.driverName is string && cs.driverName.size() <= 80)) &&
+        (!('statusText' in cs) || (cs.statusText is string && cs.statusText.size() <= 300));
     }
 
     function isValidPickupToday(pt) {
-      return isValidMap(pt, ['assignee', 'updatedAt', 'updatedBy']) &&
+      return pt is map &&
         pt.keys().hasAll(['assignee']) &&
+        pt.keys().hasOnly(['assignee', 'updatedAt', 'updatedBy']) &&
         pt.assignee is string && pt.assignee.size() > 0 && pt.assignee.size() <= 64 &&
-        (!('updatedAt' in pt) || isValidTimestampOrString(pt.updatedAt)) &&
-        isValidOptionalString(pt, 'updatedBy', 0, 80);
-    }
-
-    function isValidSavedPlace(place) {
-      return isValidMap(place, ['id', 'icon', 'name', 'address', 'lat', 'lon', 'radiusM']) &&
-        place.keys().hasAll(['id', 'name', 'lat', 'lon']) &&
-        place.id is string && place.id.size() > 0 && place.id.size() <= 48 &&
-        place.name is string && place.name.size() > 0 && place.name.size() <= 64 &&
-        isValidOptionalString(place, 'icon', 0, 16) &&
-        isValidOptionalString(place, 'address', 0, 200) &&
-        place.lat is number && place.lat >= -90 && place.lat <= 90 &&
-        place.lon is number && place.lon >= -180 && place.lon <= 180 &&
-        (!('radiusM' in place) || (place.radiusM is number && place.radiusM >= 10 && place.radiusM <= 10000));
+        (!('updatedBy' in pt) || (pt.updatedBy is string && pt.updatedBy.size() <= 80));
     }
 
     function isValidSavedPlaces(places) {
-      return isValidList(places, 20) &&
-        (places.size() == 0 || isValidSavedPlace(places[0])) &&
-        (places.size() <= 1 || isValidSavedPlace(places[places.size() - 1])) &&
-        (places.size() <= 2 || isValidSavedPlace(places[1]));
-    }
-
-    function isValidHistoryEntry(entry) {
-      return isValidMap(entry, [
-          'id', 'endedAt', 'driverName', 'method',
-          'reason', 'maxSpeedKmh', 'children', 'outcome'
-        ]) &&
-        entry.keys().hasAll(['id', 'endedAt', 'outcome']) &&
-        entry.id is string && entry.id.size() > 0 && entry.id.size() <= 48 &&
-        isValidTimestampOrString(entry.endedAt) &&
-        isValidOptionalString(entry, 'driverName', 0, 80) &&
-        isValidOptionalString(entry, 'method', 0, 80) &&
-        isValidOptionalString(entry, 'reason', 0, 240) &&
-        (!('maxSpeedKmh' in entry) || (entry.maxSpeedKmh is number && entry.maxSpeedKmh >= 0 && entry.maxSpeedKmh <= 400)) &&
-        (!('children' in entry) || (
-          isValidList(entry.children, 12) &&
-          (entry.children.size() == 0 || (entry.children[0] is string && entry.children[0].size() <= 40)) &&
-          (entry.children.size() <= 1 || (entry.children[entry.children.size() - 1] is string && entry.children[entry.children.size() - 1].size() <= 40))
-        )) &&
-        entry.outcome is string && entry.outcome in ['EMPTY', 'DAYCARE_SOLO'];
+      return places is list &&
+        places.size() <= 20 &&
+        (places.size() == 0 || (
+          places[0] is map &&
+          places[0].keys().hasAll(['id', 'name', 'lat', 'lon']) &&
+          places[0].keys().hasOnly(['id', 'icon', 'name', 'address', 'lat', 'lon', 'radiusM']) &&
+          places[0].id is string && places[0].id.size() <= 48 &&
+          places[0].name is string && places[0].name.size() <= 64 &&
+          places[0].lat is number && places[0].lat >= -90 && places[0].lat <= 90 &&
+          places[0].lon is number && places[0].lon >= -180 && places[0].lon <= 180
+        ));
     }
 
     function isValidHistory(history) {
-      return isValidList(history, 50) &&
-        (history.size() == 0 || isValidHistoryEntry(history[0])) &&
-        (history.size() <= 1 || isValidHistoryEntry(history[history.size() - 1]));
+      return history is list &&
+        history.size() <= 50 &&
+        (history.size() == 0 || (
+          history[0] is map &&
+          history[0].keys().hasAll(['id', 'endedAt', 'outcome']) &&
+          history[0].keys().hasOnly([
+            'id', 'endedAt', 'driverName', 'method',
+            'reason', 'maxSpeedKmh', 'children', 'outcome'
+          ]) &&
+          history[0].id is string && history[0].id.size() <= 48 &&
+          history[0].outcome is string && history[0].outcome in ['EMPTY', 'DAYCARE_SOLO']
+        ));
     }
 
-    // Master validator invoked on BOTH create and update to eliminate Update Bypass
     function isValidFamilyDoc(data) {
-      return hasRequiredFields(['coupleStatus', 'pickupToday', 'savedPlaces', 'history']) &&
-        hasOnlyAllowedFields([
+      return data.keys().hasAll(['coupleStatus', 'pickupToday', 'savedPlaces', 'history']) &&
+        data.keys().hasOnly([
           'dayKey', 'profiles', 'coupleStatus', 'pickupToday',
           'savedPlaces', 'history', 'updatedAt', 'pinConfigured'
         ]) &&
-        isValidOptionalString(data, 'dayKey', 0, 16) &&
+        (!('dayKey' in data) || (data.dayKey is string && data.dayKey.size() <= 16)) &&
         (!('profiles' in data) || isValidProfiles(data.profiles)) &&
         isValidCoupleStatus(data.coupleStatus) &&
         isValidPickupToday(data.pickupToday) &&
         isValidSavedPlaces(data.savedPlaces) &&
         isValidHistory(data.history) &&
-        (!('updatedAt' in data) || isValidTimestampOrString(data.updatedAt)) &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 64)) &&
         (!('pinConfigured' in data) || data.pinConfigured is bool);
     }
 
-    // ========================================================================
-    // Collection Rules
-    // ========================================================================
-
     match /families/{familyDocId} {
-      // Allow single-document lookup only with a valid family_<PIN> ID
       allow get: if isValidFamilyDocId(familyDocId);
-
-      // Strictly block collection enumeration / queries
       allow list: if false;
-
-      // Enforce identical strict schema, type, and size validation on create & update
       allow create, update: if isValidFamilyDocId(familyDocId) &&
         isValidFamilyDoc(request.resource.data);
-
-      // Strictly prevent family state deletion
       allow delete: if false;
     }
 
-    // Default deny all other collections, subcollections, and paths
     match /{document=**} {
       allow read, write: if false;
     }

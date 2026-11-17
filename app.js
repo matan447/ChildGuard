@@ -720,8 +720,11 @@ async function syncToFirestore(stateObj) {
       els.firebaseBadge.dataset.ready = 'true';
       els.firebaseBadge.textContent = '☁️ Firebase מסונכרן חי ✓';
     }
-  } catch {
-    // Firestore may still be unprovisioned or offline
+  } catch (err) {
+    if (els.firebaseBadge && err?.code === 'permission-denied') {
+      els.firebaseBadge.dataset.ready = 'false';
+      els.firebaseBadge.textContent = '☁️ Firebase: עדכן firestore.rules בקונסול';
+    }
   }
 }
 
