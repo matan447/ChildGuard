@@ -318,7 +318,7 @@ const DEFAULT_SETTINGS = {
   escalationDelaySeconds: 180,
   emergencyContactName: 'דנה',
   emergencyContactPhone: '',
-  familyPin: '1234',
+  familyPin: '',
   savedVolumePct: 25,
   localUpdatedAt: '',
   placesUpdatedAt: '',
@@ -599,8 +599,8 @@ function getCurrentDriverName() {
 }
 
 function sanitizeFamilyPin(raw) {
-  const cleaned = String(raw || '1234').replace(/[^A-Za-z0-9_-]/g, '');
-  return cleaned.length >= 4 ? cleaned.slice(0, 24) : '1234';
+  const cleaned = String(raw || '').replace(/[^A-Za-z0-9_-]/g, '');
+  return cleaned.length >= 4 ? cleaned.slice(0, 24) : '';
 }
 
 function buildSeedCoupleState() {
@@ -779,7 +779,8 @@ async function syncToFirestore(stateObj) {
         savedVolumePct:
           cs.savedVolumePct === null || cs.savedVolumePct === undefined
             ? 25
-            : Math.min(100, Math.max(0, Number(cs.savedVolumePct)))
+            : Math.min(100, Math.max(0, Number(cs.savedVolumePct))),
+        originPlaceId: String(cs.originPlaceId || '').slice(0, 48)
       },
       pickupToday: {
         assignee: String(pt.assignee || 'אני').slice(0, 64),
@@ -828,6 +829,14 @@ async function initFirebaseSync() {
     const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
     const db = getFirestore(app);
     const pin = sanitizeFamilyPin(appState.settings.familyPin);
+    const isLocalHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+    if (!pin || (pin.length < 12 && !isLocalHost)) {
+      if (els.firebaseBadge) {
+        els.firebaseBadge.dataset.ready = 'false';
+        els.firebaseBadge.textContent = '🔒 הזן קוד משפחה סודי';
+      }
+      return;
+    }
     const docRef = doc(db, 'families', `family_${pin}`);
 
     firebaseSync.db = db;
@@ -875,7 +884,19 @@ async function initFirebaseSync() {
 async function apiFetchState() {
   try {
     const pin = sanitizeFamilyPin(appState.settings.familyPin);
+    if (!pin) {
+      if (els.coupleStatusText) {
+        els.coupleStatusText.textContent = '🔒 נדרש קוד משפחה סודי (פתח דרך הקישור הפרטי או הזן בהגדרות)';
+      }
+      return null;
+    }
     const res = await fetch(`./api/state?pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
+    if (res.status === 401) {
+      if (els.coupleStatusText) {
+        els.coupleStatusText.textContent = '🔒 קוד משפחה סודי שגוי — הזן קוד תקף בהגדרות';
+      }
+      return null;
+    }
     if (!res.ok) return null;
     const data = await res.json();
     applyRemoteState(data);
@@ -887,11 +908,13 @@ async function apiFetchState() {
 
 async function apiPostEvent(type, payload = {}) {
   try {
+    const pin = sanitizeFamilyPin(appState.settings.familyPin);
+    if (!pin) return null;
     const res = await fetch('./api/event', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Family-Key': sanitizeFamilyPin(appState.settings.familyPin)
+        'X-Family-Key': pin
       },
       body: JSON.stringify({
         type,
@@ -928,7 +951,9 @@ async function checkPreBeepShouldAlarm(ignoreLocalOverride = false) {
     }
   }
   try {
-    const res = await fetch('./api/should-alarm', { cache: 'no-store' });
+    const pin = sanitizeFamilyPin(appState.settings.familyPin);
+    const qs = pin ? `?pin=${encodeURIComponent(pin)}` : '';
+    const res = await fetch(`./api/should-alarm${qs}`, { cache: 'no-store' });
     if (res.ok) {
       const data = await res.json();
       if (!ignoreLocalOverride && data.alarmRequired === false && ['SOLO_CONTINUE', 'SNOOZED_GARAGE', 'RECENTLY_VERIFIED'].includes(data.reason)) {
@@ -1100,9 +1125,12 @@ async function playGeminiFemaleAlert(kind = null, customText = null, forcePlay =
 
   if ((selectedVoice !== 'Aoede' || customText) && navigator.onLine) {
     try {
+      const pin = sanitizeFamilyPin(appState.settings.familyPin);
+      const headers = { 'Content-Type': 'application/json' };
+      if (pin) headers['X-Family-Key'] = pin;
       const res = await fetch('./api/tts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ text: fallbackText, voice: selectedVoice })
       });
       if (res.ok) {
@@ -2376,8 +2404,17 @@ async function runDemoHeatwave() {
 async function runSelfCheck() {
   const checks = [];
   try {
-    const res = await fetch('./api/should-alarm', { cache: 'no-store' });
-    checks.push(res.ok ? '✅ חיבור לשרת הסנכרון הזוגי תקין (Pre-Beep מוכן)' : '❌ שרת הסנכרון לא החזיר תשובה תקינה');
+    const pin = sanitizeFamilyPin(appState.settings.familyPin);
+    if (!pin) {
+      checks.push('🔒 יש להזין קוד משפחה סודי (או לפתוח דרך הקישור הפרטי) כדי להתחבר לשרת');
+    } else {
+      const res = await fetch(`./api/should-alarm?pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
+      if (res.status === 401) {
+        checks.push('❌ קוד משפחה סודי שגוי — השרת דחה את הבקשה (401)');
+      } else {
+        checks.push(res.ok ? '✅ חיבור לשרת הסנכרון הזוגי תקין (Pre-Beep מוכן)' : '❌ שרת הסנכרון לא החזיר תשובה תקינה');
+      }
+    }
   } catch {
     checks.push('⚠️ השרת אינו זמין כרגע – מצב חירום מקומי פעיל (Offline Fail-Safe)');
   }
@@ -2935,10 +2972,11 @@ function renderQrStickerAndUrls() {
   els.stickerQrContainer.innerHTML = QR.toSvg(QR_PAYLOAD);
   const baseUrl = window.location.origin + window.location.pathname;
   const pin = sanitizeFamilyPin(appState.settings.familyPin);
-  els.endTriggerUrl.textContent = `${window.location.origin}/api/shortcut/exit?pin=${encodeURIComponent(pin)}&format=audio`;
-  els.startTriggerUrl.textContent = `${window.location.origin}/api/shortcut/start?pin=${encodeURIComponent(pin)}&format=text`;
-  els.prebeepCheckUrl.textContent = `${window.location.origin}/api/should-alarm?pin=${encodeURIComponent(pin)}`;
-  els.guestDriverUrl.textContent = `${baseUrl}?role=guest`;
+  const displayPin = pin || 'YOUR_SECRET_PIN';
+  els.endTriggerUrl.textContent = `${window.location.origin}/api/shortcut/exit?pin=${encodeURIComponent(displayPin)}&format=audio`;
+  els.startTriggerUrl.textContent = `${window.location.origin}/api/shortcut/start?pin=${encodeURIComponent(displayPin)}&format=text`;
+  els.prebeepCheckUrl.textContent = `${window.location.origin}/api/should-alarm?pin=${encodeURIComponent(displayPin)}`;
+  els.guestDriverUrl.textContent = pin ? `${baseUrl}?role=guest&pin=${encodeURIComponent(pin)}` : `${baseUrl}?role=guest`;
 }
 
 // ============================================================================
@@ -3280,7 +3318,7 @@ function bindEvents() {
     els.familyPinInput.value = appState.settings.familyPin;
     saveSettings();
     renderQrStickerAndUrls();
-    await apiPostEvent('UPDATE_PIN', { newPin: appState.settings.familyPin });
+    await apiFetchState();
     initFirebaseSync();
   });
 
@@ -3421,6 +3459,17 @@ function registerServiceWorker() {
 // Bootstrap
 // ============================================================================
 async function init() {
+  const params = new URLSearchParams(window.location.search);
+  const urlPin = sanitizeFamilyPin(params.get('pin'));
+  if (urlPin) {
+    appState.settings.familyPin = urlPin;
+    saveSettings();
+    params.delete('pin');
+    const cleanSearch = params.toString();
+    const cleanUrl = `${window.location.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${window.location.hash}`;
+    window.history.replaceState({}, '', cleanUrl);
+  }
+
   if (!window.isSecureContext) {
     els.originLabel.textContent = window.location.origin;
     els.securityBanner.hidden = false;
@@ -3436,7 +3485,6 @@ async function init() {
   bindEvents();
   registerServiceWorker();
 
-  const params = new URLSearchParams(window.location.search);
   const hasDeepLinkDriveAction =
     params.get('trigger') === 'car_exit' || ['end_drive', 'start_drive'].includes(params.get('action'));
 

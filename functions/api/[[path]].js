@@ -1,11 +1,22 @@
 const FIREBASE_PROJECT_ID = 'child-guard-e0744';
 const FIREBASE_API_KEY = 'AIzaSyAnmp4FhIY5JlFk0Zis7fMbY5r7VGmmGqY';
 
-let memoryFallbackState = null;
+const memoryFallbackByPin = new Map();
 
 function sanitizePin(raw) {
-  const cleaned = String(raw || '1234').replace(/[^A-Za-z0-9_-]/g, '');
-  return cleaned.length >= 4 ? cleaned.slice(0, 24) : '1234';
+  const cleaned = String(raw || '').replace(/[^A-Za-z0-9_-]/g, '');
+  return cleaned.length >= 4 ? cleaned.slice(0, 24) : '';
+}
+
+function timingSafeEqualStr(a, b) {
+  const sa = String(a || '');
+  const sb = String(b || '');
+  if (sa.length !== sb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < sa.length; i++) {
+    diff |= sa.charCodeAt(i) ^ sb.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 function firestoreDocUrl(pin) {
@@ -89,9 +100,9 @@ function nowHourJerusalem() {
   return Number.isFinite(h) ? h % 24 : new Date().getHours();
 }
 
-function createDefaultState() {
+function createDefaultState(pin = '') {
   return {
-    familyPin: '1234',
+    familyPin: pin || '',
     dayKey: todayKey(),
     placesUpdatedAt: new Date(0).toISOString(),
     profiles: {
@@ -111,7 +122,8 @@ function createDefaultState() {
       droppedOffAtDaycareToday: false,
       brokenRoutineAlert: false,
       tempC: null,
-      savedVolumePct: 25
+      savedVolumePct: 25,
+      originPlaceId: ''
     },
     pickupToday: {
       assignee: 'אני',
@@ -127,18 +139,20 @@ function createDefaultState() {
   };
 }
 
-async function loadState(env, pin = '1234') {
+async function loadState(env, pin = '') {
+  const safePin = sanitizePin(pin);
+  const memFallback = safePin ? memoryFallbackByPin.get(safePin) || null : null;
   let state = null;
-  if (env?.CHILDGUARD_KV) {
+  if (env?.CHILDGUARD_KV && safePin) {
     try {
-      state = await env.CHILDGUARD_KV.get(`family_state_${sanitizePin(pin)}`, 'json');
+      state = await env.CHILDGUARD_KV.get(`family_state_${safePin}`, 'json');
     } catch {
       state = null;
     }
   }
-  if (!state) {
+  if (!state && safePin) {
     try {
-      const res = await fetch(firestoreDocUrl(pin));
+      const res = await fetch(firestoreDocUrl(safePin));
       if (res.ok) {
         const docJson = await res.json();
         if (docJson?.fields) {
@@ -150,29 +164,34 @@ async function loadState(env, pin = '1234') {
     }
   }
   if (!state) {
-    state = memoryFallbackState || createDefaultState();
-  } else if (memoryFallbackState) {
-    const memPlacesMs = Date.parse(memoryFallbackState.placesUpdatedAt || '') || 0;
+    state = memFallback || createDefaultState(safePin);
+  } else if (memFallback) {
+    const memPlacesMs = Date.parse(memFallback.placesUpdatedAt || '') || 0;
     const statePlacesMs = Date.parse(state.placesUpdatedAt || '') || 0;
     if (memPlacesMs > statePlacesMs) {
-      state.savedPlaces = memoryFallbackState.savedPlaces;
-      state.placesUpdatedAt = memoryFallbackState.placesUpdatedAt;
+      state.savedPlaces = memFallback.savedPlaces;
+      state.placesUpdatedAt = memFallback.placesUpdatedAt;
     }
-    const memUpdatedMs = Date.parse(memoryFallbackState.coupleStatus?.updatedAt || '') || 0;
+    const memUpdatedMs = Date.parse(memFallback.coupleStatus?.updatedAt || '') || 0;
     const stateUpdatedMs = Date.parse(state.coupleStatus?.updatedAt || '') || 0;
     if (memUpdatedMs > stateUpdatedMs) {
-      state.profiles = memoryFallbackState.profiles;
-      state.coupleStatus = memoryFallbackState.coupleStatus;
-      state.pickupToday = memoryFallbackState.pickupToday;
-      state.history = memoryFallbackState.history;
+      state.profiles = memFallback.profiles;
+      state.coupleStatus = memFallback.coupleStatus;
+      state.pickupToday = memFallback.pickupToday;
+      state.history = memFallback.history;
     }
   }
-  const def = createDefaultState();
+  const def = createDefaultState(safePin);
   const normalized = {
     ...def,
     ...state,
+    familyPin: safePin,
     profiles: { ...def.profiles, ...(state.profiles || {}) },
-    coupleStatus: { ...def.coupleStatus, ...(state.coupleStatus || {}) },
+    coupleStatus: {
+      ...def.coupleStatus,
+      ...(state.coupleStatus || {}),
+      originPlaceId: String(state.coupleStatus?.originPlaceId || '').slice(0, 48)
+    },
     pickupToday: { ...def.pickupToday, ...(state.pickupToday || {}) },
     savedPlaces: Array.isArray(state.savedPlaces)
       ? state.savedPlaces.map((p) => ({ address: '', ...p }))
@@ -182,17 +201,19 @@ async function loadState(env, pin = '1234') {
   return normalized;
 }
 
-async function saveState(env, state, pin = '1234') {
-  memoryFallbackState = state;
+async function saveState(env, state, pin = '') {
+  const safePin = sanitizePin(pin);
+  if (!safePin) return false;
+  memoryFallbackByPin.set(safePin, state);
   if (env?.CHILDGUARD_KV) {
     try {
-      await env.CHILDGUARD_KV.put(`family_state_${sanitizePin(pin)}`, JSON.stringify(state));
+      await env.CHILDGUARD_KV.put(`family_state_${safePin}`, JSON.stringify(state));
     } catch {
       // Ignore KV write failure
     }
   }
   try {
-    const res = await fetch(firestoreDocUrl(pin), {
+    const res = await fetch(firestoreDocUrl(safePin), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields: buildFirestoreFields(state) })
@@ -300,7 +321,9 @@ function applyTripStart(familyState, payload, driverName) {
   const cs = familyState.coupleStatus;
   const timeStr = nowTimeHe();
   const originPlace = detectPlace(familyState, payload.lat, payload.lon, payload.originPlaceId);
-  familyState.originPlaceId = payload.originPlaceId || originPlace?.id || '';
+  const resolvedOrigin = String(payload.originPlaceId || originPlace?.id || '').slice(0, 48);
+  familyState.originPlaceId = resolvedOrigin;
+  cs.originPlaceId = resolvedOrigin;
   cs.driverName = driverName;
   cs.state = 'DRIVING';
   cs.brokenRoutineAlert = false;
@@ -313,7 +336,12 @@ function applyTripStart(familyState, payload, driverName) {
   return originPlace;
 }
 
-function evaluateTripEnd(familyState, payload, driverName, { enforcePrecheck = false } = {}) {
+function evaluateTripEnd(
+  familyState,
+  payload,
+  driverName,
+  { enforcePrecheck = false, autoMarkMorningDropoff = false, nowHourOverride } = {}
+) {
   const now = Date.now();
   const cs = familyState.coupleStatus;
   const timeStr = nowTimeHe();
@@ -323,14 +351,21 @@ function evaluateTripEnd(familyState, payload, driverName, { enforcePrecheck = f
 
   const place = detectPlace(familyState, payload.lat, payload.lon, payload.placeId);
   familyState.lastEndPlaceId = place?.id || '';
-  const originPlaceId = payload.originPlaceId || familyState.originPlaceId || '';
-  const hour = nowHourJerusalem();
+  const originPlaceId = payload.originPlaceId || cs.originPlaceId || familyState.originPlaceId || '';
+  cs.originPlaceId = '';
+  familyState.originPlaceId = '';
+
+  const hour = typeof nowHourOverride === 'number' ? nowHourOverride : nowHourJerusalem();
   const isAfternoon = hour >= 12;
+  const lastDropoffAgeMs = cs.lastVerifiedAt ? now - cs.lastVerifiedAt : Infinity;
+  const isDaycarePickupWindow =
+    isAfternoon || (hour >= 11 && cs.droppedOffAtDaycareToday && lastDropoffAgeMs >= 30 * 60 * 1000);
   const assignee = familyState.pickupToday?.assignee || 'אני';
 
-  if (!payload.forceBrokenRoutine && !payload.isDemo && place?.id === 'daycare' && (isAfternoon || cs.droppedOffAtDaycareToday)) {
+  if (!payload.forceBrokenRoutine && !payload.isDemo && place?.id === 'daycare' && isDaycarePickupWindow) {
     cs.soloContinueUntil = 0;
     cs.droppedOffAtDaycareToday = false;
+    cs.lastVerifiedAt = 0;
     cs.brokenRoutineAlert = false;
     cs.refuelUntil = 0;
     cs.state = 'IDLE';
@@ -382,13 +417,33 @@ function evaluateTripEnd(familyState, payload, driverName, { enforcePrecheck = f
     }
   }
 
-  cs.brokenRoutineAlert = isBrokenRoutine;
-  cs.refuelUntil = 0;
-  cs.state = isBrokenRoutine || payload.immediateAlarm ? 'ALARM_ACTIVE' : 'GRACE_PERIOD';
-  cs.statusText = isBrokenRoutine
-    ? `⚠️ חריגת שגרה! ${driverName} חנה/תה בעבודה בלי עצירה בגן (${timeStr})`
-    : `${driverName} סיים/ה נסיעה${place ? ` (${place.icon} ${place.name})` : ''} – ממתין לבדיקה`;
-  cs.updatedAt = new Date().toISOString();
+  const isHandsFreeMorningDaycareDropoff =
+    autoMarkMorningDropoff &&
+    !isBrokenRoutine &&
+    !payload.forceBrokenRoutine &&
+    !payload.isDemo &&
+    place?.id === 'daycare' &&
+    hour < 12;
+
+  if (isHandsFreeMorningDaycareDropoff) {
+    const morningSoloMs = Math.max(5, 15 - hour) * 60 * 60 * 1000;
+    cs.droppedOffAtDaycareToday = true;
+    cs.soloContinueUntil = Math.max(cs.soloContinueUntil || 0, now + morningSoloMs);
+    cs.lastVerifiedAt = now;
+    cs.brokenRoutineAlert = false;
+    cs.refuelUntil = 0;
+    cs.state = 'DROPPED_AT_DAYCARE';
+    cs.statusText = `🧸 ${driverName} עצר/ה בגן בבוקר (${timeStr}) – התראה הופעלה ופיזור נרשם אוטומטית`;
+    cs.updatedAt = new Date().toISOString();
+  } else {
+    cs.brokenRoutineAlert = isBrokenRoutine;
+    cs.refuelUntil = 0;
+    cs.state = isBrokenRoutine || payload.immediateAlarm ? 'ALARM_ACTIVE' : 'GRACE_PERIOD';
+    cs.statusText = isBrokenRoutine
+      ? `⚠️ חריגת שגרה! ${driverName} חנה/תה בעבודה בלי עצירה בגן (${timeStr})`
+      : `${driverName} סיים/ה נסיעה${place ? ` (${place.icon} ${place.name})` : ''} – ממתין לבדיקה`;
+    cs.updatedAt = new Date().toISOString();
+  }
 
   const speakText = isBrokenRoutine
     ? 'אזהרה דחופה! הגעת לעבודה בלי עצירה בגן! בדוק מיד את המושב האחורי!'
@@ -408,7 +463,20 @@ export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const pathname = url.pathname;
-  const reqPin = sanitizePin(request.headers.get('x-family-key') || url.searchParams.get('pin') || '1234');
+  const configuredPin = sanitizePin(env?.FAMILY_PIN || '');
+  const rawProvidedPin = request.headers.get('x-family-key') || url.searchParams.get('pin') || '';
+  const providedPin = sanitizePin(rawProvidedPin);
+  const reqFormat = url.searchParams.get('format') || 'json';
+
+  if (configuredPin) {
+    if (!providedPin || !timingSafeEqualStr(providedPin, configuredPin)) {
+      if (reqFormat === 'text' || reqFormat === 'audio') {
+        return textResponse('Unauthorized', 401);
+      }
+      return jsonResponse({ error: 'קוד משפחה סודי נדרש או שגוי (Unauthorized)', pinRequired: true }, 401);
+    }
+  }
+  const reqPin = configuredPin || providedPin || '1234';
 
   const familyState = await loadState(env, reqPin);
   if (cleanExpiredTimers(familyState)) {
@@ -451,11 +519,7 @@ export async function onRequest(context) {
   }
 
   if (request.method === 'GET' && pathname === '/api/shortcut/start') {
-    const providedPin = request.headers.get('x-family-key') || url.searchParams.get('pin');
     const format = url.searchParams.get('format') || 'json';
-    if (providedPin && familyState.familyPin && String(providedPin) !== String(familyState.familyPin)) {
-      return format === 'text' ? textResponse('', 401) : jsonResponse({ error: 'מפתח משפחה שגוי (Unauthorized)' }, 401);
-    }
     const driverName = resolveShortcutDriverName(familyState, url.searchParams.get('role'));
     const originPlace = applyTripStart(
       familyState,
@@ -474,11 +538,7 @@ export async function onRequest(context) {
   }
 
   if (request.method === 'GET' && pathname === '/api/shortcut/exit') {
-    const providedPin = request.headers.get('x-family-key') || url.searchParams.get('pin');
     const format = url.searchParams.get('format') || 'json';
-    if (providedPin && familyState.familyPin && String(providedPin) !== String(familyState.familyPin)) {
-      return format === 'text' ? textResponse('', 401) : jsonResponse({ error: 'מפתח משפחה שגוי (Unauthorized)' }, 401);
-    }
     const driverName = resolveShortcutDriverName(familyState, url.searchParams.get('role'));
     const result = evaluateTripEnd(
       familyState,
@@ -489,7 +549,7 @@ export async function onRequest(context) {
         immediateAlarm: true
       },
       driverName,
-      { enforcePrecheck: true }
+      { enforcePrecheck: true, autoMarkMorningDropoff: true }
     );
     await saveState(env, familyState, reqPin);
     if (format === 'audio') {
@@ -528,11 +588,6 @@ export async function onRequest(context) {
       payload = await request.json();
     } catch {
       return jsonResponse({ error: 'בקשת JSON לא תקינה' }, 400);
-    }
-
-    const providedPin = request.headers.get('x-family-key') || payload.pin;
-    if (providedPin && familyState.familyPin && String(providedPin) !== String(familyState.familyPin)) {
-      return jsonResponse({ error: 'מפתח משפחה שגוי (Unauthorized)' }, 401);
     }
 
     const now = Date.now();
@@ -771,7 +826,8 @@ export async function onRequest(context) {
 
       case 'UPDATE_PIN': {
         if (payload.newPin) {
-          familyState.familyPin = String(payload.newPin).slice(0, 12);
+          const nextPin = sanitizePin(payload.newPin);
+          if (nextPin) familyState.familyPin = nextPin;
         }
         break;
       }
@@ -783,6 +839,8 @@ export async function onRequest(context) {
 
       case 'RESET_DAY': {
         cs.state = 'IDLE';
+        cs.originPlaceId = '';
+        familyState.originPlaceId = '';
         cs.droppedOffAtDaycareToday = false;
         cs.soloContinueUntil = 0;
         cs.snoozeUntil = 0;
@@ -799,7 +857,9 @@ export async function onRequest(context) {
         return jsonResponse({ error: 'סוג אירוע לא מוכר' }, 400);
     }
 
-    const savePin = payload.type === 'UPDATE_PIN' && payload.newPin ? sanitizePin(payload.newPin) : reqPin;
+    const savePin =
+      configuredPin ||
+      (payload.type === 'UPDATE_PIN' && payload.newPin ? sanitizePin(payload.newPin) || reqPin : reqPin);
     await saveState(env, familyState, savePin);
     return jsonResponse({
       ok: true,

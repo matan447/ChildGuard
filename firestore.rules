@@ -4,7 +4,7 @@ rules_version = '2';
 // Assumed Data Model (ChildGuard - child-guard-e0744)
 // ============================================================================
 // Collection: families/{familyDocId}
-//   - Document ID: family_<PIN> matching ^family_[A-Za-z0-9_-]{4,24}$
+//   - Document ID: family_<PIN> matching ^family_[A-Za-z0-9_-]{12,24}$
 //   - Access: Shared secret PIN capability model (no login screen) for
 //     two partners' iPhones and Cloudflare Pages Functions REST API.
 //     List queries and deletes are explicitly blocked.
@@ -16,7 +16,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     function isValidFamilyDocId(familyDocId) {
-      return familyDocId.matches('^family_[A-Za-z0-9_-]{4,24}$');
+      return familyDocId.matches('^family_[A-Za-z0-9_-]{12,24}$');
     }
 
     function isValidProfiles(p) {
@@ -33,11 +33,13 @@ service cloud.firestore {
         cs.keys().hasOnly([
           'state', 'driverName', 'statusText', 'updatedAt',
           'lastVerifiedAt', 'soloContinueUntil', 'snoozeUntil', 'refuelUntil',
-          'droppedOffAtDaycareToday', 'brokenRoutineAlert', 'tempC', 'savedVolumePct'
+          'droppedOffAtDaycareToday', 'brokenRoutineAlert', 'tempC', 'savedVolumePct',
+          'originPlaceId'
         ]) &&
         cs.state is string && cs.state.size() > 0 && cs.state.size() <= 40 &&
         (!('driverName' in cs) || (cs.driverName is string && cs.driverName.size() <= 80)) &&
-        (!('statusText' in cs) || (cs.statusText is string && cs.statusText.size() <= 300));
+        (!('statusText' in cs) || (cs.statusText is string && cs.statusText.size() <= 300)) &&
+        (!('originPlaceId' in cs) || (cs.originPlaceId is string && cs.originPlaceId.size() <= 48));
     }
 
     function isValidPickupToday(pt) {

@@ -21,17 +21,18 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
-function loadGeminiApiKey() {
-  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY.trim();
+function loadEnvValue(key) {
+  if (process.env[key]) return String(process.env[key]).trim();
   const candidates = [
     path.join(ROOT_DIR, '.env'),
     path.resolve(ROOT_DIR, '..', 'nettobox', '.env')
   ];
+  const pattern = new RegExp(`^${key}=(.+)$`, 'm');
   for (const envPath of candidates) {
     if (fs.existsSync(envPath)) {
       try {
         const content = fs.readFileSync(envPath, 'utf8');
-        const match = content.match(/^GEMINI_API_KEY=(.+)$/m);
+        const match = content.match(pattern);
         if (match && match[1].trim()) return match[1].trim();
       } catch {
         // Ignore unreadable .env
@@ -39,6 +40,30 @@ function loadGeminiApiKey() {
     }
   }
   return '';
+}
+
+function loadGeminiApiKey() {
+  return loadEnvValue('GEMINI_API_KEY');
+}
+
+function loadFamilyPin() {
+  return loadEnvValue('FAMILY_PIN');
+}
+
+function sanitizePin(raw) {
+  const cleaned = String(raw || '').replace(/[^A-Za-z0-9_-]/g, '');
+  return cleaned.length >= 4 ? cleaned.slice(0, 24) : '';
+}
+
+function timingSafeEqualStr(a, b) {
+  const sa = String(a || '');
+  const sb = String(b || '');
+  if (sa.length !== sb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < sa.length; i++) {
+    diff |= sa.charCodeAt(i) ^ sb.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 function todayKey() {
@@ -62,7 +87,7 @@ function nowHourJerusalem() {
 
 function createDefaultState() {
   return {
-    familyPin: '1234',
+    familyPin: '',
     dayKey: todayKey(),
     placesUpdatedAt: new Date(0).toISOString(),
     profiles: {
@@ -82,7 +107,8 @@ function createDefaultState() {
       droppedOffAtDaycareToday: false,
       brokenRoutineAlert: false,
       tempC: null,
-      savedVolumePct: 25
+      savedVolumePct: 25,
+      originPlaceId: ''
     },
     pickupToday: {
       assignee: 'אני',
@@ -111,7 +137,11 @@ function loadFamilyState() {
       ...def,
       ...parsed,
       profiles: { ...def.profiles, ...(parsed.profiles || {}) },
-      coupleStatus: { ...def.coupleStatus, ...(parsed.coupleStatus || {}) },
+      coupleStatus: {
+        ...def.coupleStatus,
+        ...(parsed.coupleStatus || {}),
+        originPlaceId: String(parsed.coupleStatus?.originPlaceId || '').slice(0, 48)
+      },
       pickupToday: { ...def.pickupToday, ...(parsed.pickupToday || {}) },
       savedPlaces: Array.isArray(parsed.savedPlaces)
         ? parsed.savedPlaces.map((p) => ({ address: '', ...p }))
@@ -231,7 +261,9 @@ function applyTripStart(familyState, payload, driverName) {
   const cs = familyState.coupleStatus;
   const timeStr = nowTimeHe();
   const originPlace = detectPlace(familyState, payload.lat, payload.lon, payload.originPlaceId);
-  familyState.originPlaceId = payload.originPlaceId || originPlace?.id || '';
+  const resolvedOrigin = String(payload.originPlaceId || originPlace?.id || '').slice(0, 48);
+  familyState.originPlaceId = resolvedOrigin;
+  cs.originPlaceId = resolvedOrigin;
   cs.driverName = driverName;
   cs.state = 'DRIVING';
   cs.brokenRoutineAlert = false;
@@ -244,7 +276,12 @@ function applyTripStart(familyState, payload, driverName) {
   return originPlace;
 }
 
-function evaluateTripEnd(familyState, payload, driverName, { enforcePrecheck = false } = {}) {
+function evaluateTripEnd(
+  familyState,
+  payload,
+  driverName,
+  { enforcePrecheck = false, autoMarkMorningDropoff = false, nowHourOverride } = {}
+) {
   const now = Date.now();
   const cs = familyState.coupleStatus;
   const timeStr = nowTimeHe();
@@ -254,14 +291,21 @@ function evaluateTripEnd(familyState, payload, driverName, { enforcePrecheck = f
 
   const place = detectPlace(familyState, payload.lat, payload.lon, payload.placeId);
   familyState.lastEndPlaceId = place?.id || '';
-  const originPlaceId = payload.originPlaceId || familyState.originPlaceId || '';
-  const hour = nowHourJerusalem();
+  const originPlaceId = payload.originPlaceId || cs.originPlaceId || familyState.originPlaceId || '';
+  cs.originPlaceId = '';
+  familyState.originPlaceId = '';
+
+  const hour = typeof nowHourOverride === 'number' ? nowHourOverride : nowHourJerusalem();
   const isAfternoon = hour >= 12;
+  const lastDropoffAgeMs = cs.lastVerifiedAt ? now - cs.lastVerifiedAt : Infinity;
+  const isDaycarePickupWindow =
+    isAfternoon || (hour >= 11 && cs.droppedOffAtDaycareToday && lastDropoffAgeMs >= 30 * 60 * 1000);
   const assignee = familyState.pickupToday?.assignee || 'אני';
 
-  if (!payload.forceBrokenRoutine && !payload.isDemo && place?.id === 'daycare' && (isAfternoon || cs.droppedOffAtDaycareToday)) {
+  if (!payload.forceBrokenRoutine && !payload.isDemo && place?.id === 'daycare' && isDaycarePickupWindow) {
     cs.soloContinueUntil = 0;
     cs.droppedOffAtDaycareToday = false;
+    cs.lastVerifiedAt = 0;
     cs.brokenRoutineAlert = false;
     cs.refuelUntil = 0;
     cs.state = 'IDLE';
@@ -313,13 +357,33 @@ function evaluateTripEnd(familyState, payload, driverName, { enforcePrecheck = f
     }
   }
 
-  cs.brokenRoutineAlert = isBrokenRoutine;
-  cs.refuelUntil = 0;
-  cs.state = isBrokenRoutine || payload.immediateAlarm ? 'ALARM_ACTIVE' : 'GRACE_PERIOD';
-  cs.statusText = isBrokenRoutine
-    ? `⚠️ חריגת שגרה! ${driverName} חנה/תה בעבודה בלי עצירה בגן (${timeStr})`
-    : `${driverName} סיים/ה נסיעה${place ? ` (${place.icon} ${place.name})` : ''} – ממתין לבדיקה`;
-  cs.updatedAt = new Date().toISOString();
+  const isHandsFreeMorningDaycareDropoff =
+    autoMarkMorningDropoff &&
+    !isBrokenRoutine &&
+    !payload.forceBrokenRoutine &&
+    !payload.isDemo &&
+    place?.id === 'daycare' &&
+    hour < 12;
+
+  if (isHandsFreeMorningDaycareDropoff) {
+    const morningSoloMs = Math.max(5, 15 - hour) * 60 * 60 * 1000;
+    cs.droppedOffAtDaycareToday = true;
+    cs.soloContinueUntil = Math.max(cs.soloContinueUntil || 0, now + morningSoloMs);
+    cs.lastVerifiedAt = now;
+    cs.brokenRoutineAlert = false;
+    cs.refuelUntil = 0;
+    cs.state = 'DROPPED_AT_DAYCARE';
+    cs.statusText = `🧸 ${driverName} עצר/ה בגן בבוקר (${timeStr}) – התראה הופעלה ופיזור נרשם אוטומטית`;
+    cs.updatedAt = new Date().toISOString();
+  } else {
+    cs.brokenRoutineAlert = isBrokenRoutine;
+    cs.refuelUntil = 0;
+    cs.state = isBrokenRoutine || payload.immediateAlarm ? 'ALARM_ACTIVE' : 'GRACE_PERIOD';
+    cs.statusText = isBrokenRoutine
+      ? `⚠️ חריגת שגרה! ${driverName} חנה/תה בעבודה בלי עצירה בגן (${timeStr})`
+      : `${driverName} סיים/ה נסיעה${place ? ` (${place.icon} ${place.name})` : ''} – ממתין לבדיקה`;
+    cs.updatedAt = new Date().toISOString();
+  }
 
   const speakText = isBrokenRoutine
     ? 'אזהרה דחופה! הגעת לעבודה בלי עצירה בגן! בדוק מיד את המושב האחורי!'
@@ -346,6 +410,22 @@ function readJsonBody(req) {
 }
 
 function handleApi(req, res, reqUrl) {
+  const configuredPin = sanitizePin(loadFamilyPin());
+  const rawProvidedPin = req.headers['x-family-key'] || reqUrl.searchParams.get('pin') || '';
+  const providedPin = sanitizePin(rawProvidedPin);
+  const reqFormat = reqUrl.searchParams.get('format') || 'json';
+
+  if (configuredPin) {
+    if (!providedPin || !timingSafeEqualStr(providedPin, configuredPin)) {
+      if (reqFormat === 'text' || reqFormat === 'audio') {
+        sendText(res, 401, 'Unauthorized');
+      } else {
+        sendJson(res, 401, { error: 'קוד משפחה סודי נדרש או שגוי (Unauthorized)', pinRequired: true });
+      }
+      return true;
+    }
+  }
+
   cleanExpiredTimers(familyState);
   const pathname = reqUrl.pathname;
 
@@ -353,7 +433,7 @@ function handleApi(req, res, reqUrl) {
     const publicCopy = {
       ...familyState,
       familyPin: undefined,
-      pinConfigured: Boolean(familyState.familyPin)
+      pinConfigured: Boolean(configuredPin || familyState.familyPin)
     };
     sendJson(res, 200, publicCopy);
     return true;
@@ -392,13 +472,7 @@ function handleApi(req, res, reqUrl) {
   }
 
   if (req.method === 'GET' && pathname === '/api/shortcut/start') {
-    const providedPin = req.headers['x-family-key'] || reqUrl.searchParams.get('pin');
     const format = reqUrl.searchParams.get('format') || 'json';
-    if (providedPin && familyState.familyPin && String(providedPin) !== String(familyState.familyPin)) {
-      if (format === 'text') sendText(res, 401, '');
-      else sendJson(res, 401, { error: 'מפתח משפחה שגוי (Unauthorized)' });
-      return true;
-    }
     const driverName = resolveShortcutDriverName(familyState, reqUrl.searchParams.get('role'));
     const originPlace = applyTripStart(
       familyState,
@@ -419,13 +493,7 @@ function handleApi(req, res, reqUrl) {
   }
 
   if (req.method === 'GET' && pathname === '/api/shortcut/exit') {
-    const providedPin = req.headers['x-family-key'] || reqUrl.searchParams.get('pin');
     const format = reqUrl.searchParams.get('format') || 'json';
-    if (providedPin && familyState.familyPin && String(providedPin) !== String(familyState.familyPin)) {
-      if (format === 'text') sendText(res, 401, '');
-      else sendJson(res, 401, { error: 'מפתח משפחה שגוי (Unauthorized)' });
-      return true;
-    }
     const driverName = resolveShortcutDriverName(familyState, reqUrl.searchParams.get('role'));
     const result = evaluateTripEnd(
       familyState,
@@ -436,7 +504,7 @@ function handleApi(req, res, reqUrl) {
         immediateAlarm: true
       },
       driverName,
-      { enforcePrecheck: true }
+      { enforcePrecheck: true, autoMarkMorningDropoff: true }
     );
     saveFamilyState(familyState);
     if (format === 'audio') {
@@ -549,12 +617,6 @@ function handleApi(req, res, reqUrl) {
   if (req.method === 'POST' && pathname === '/api/event') {
     readJsonBody(req)
       .then((payload) => {
-        const providedPin = req.headers['x-family-key'] || payload.pin;
-        if (providedPin && familyState.familyPin && String(providedPin) !== String(familyState.familyPin)) {
-          sendJson(res, 401, { error: 'מפתח משפחה שגוי (Unauthorized)' });
-          return;
-        }
-
         const now = Date.now();
         const cs = familyState.coupleStatus;
         const driverName = payload.driverName || cs.driverName || 'אני (אלון)';
@@ -791,7 +853,8 @@ function handleApi(req, res, reqUrl) {
 
           case 'UPDATE_PIN': {
             if (payload.newPin) {
-              familyState.familyPin = String(payload.newPin).slice(0, 12);
+              const nextPin = sanitizePin(payload.newPin);
+              if (nextPin) familyState.familyPin = nextPin;
             }
             break;
           }
@@ -803,6 +866,8 @@ function handleApi(req, res, reqUrl) {
 
           case 'RESET_DAY': {
             cs.state = 'IDLE';
+            cs.originPlaceId = '';
+            familyState.originPlaceId = '';
             cs.droppedOffAtDaycareToday = false;
             cs.soloContinueUntil = 0;
             cs.snoozeUntil = 0;

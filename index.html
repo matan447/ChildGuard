@@ -11,7 +11,7 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" type="image/svg+xml" href="./icon.svg">
   <link rel="apple-touch-icon" href="./icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=10">
+  <link rel="stylesheet" href="./styles.css?v=11">
 </head>
 <body>
   <div id="security-banner" class="context-banner" hidden>
@@ -421,7 +421,7 @@
         </label>
         <label class="field">
           <span>קוד סודי זוגי (PIN לשרת)</span>
-          <input id="family-pin-input" type="text" dir="ltr" value="1234" maxlength="12">
+          <input id="family-pin-input" type="text" dir="ltr" value="" placeholder="הזן קוד משפחה סודי" maxlength="24" autocomplete="off">
         </label>
       </div>
     </section>
@@ -629,7 +629,7 @@
             <button type="button" class="btn-secondary btn-sm copy-btn" data-copy-target="end-trigger-url">העתק</button>
           </div>
           <p>
-            3. הוסף מיד מתחתיו פעולה 2: <strong>הפעל צליל (Play Sound)</strong> — הוא מנגן את הקול הנשי מיד כשהאייפון נעול בכיס!<br>
+            3. הוסף מיד מתחתיו פעולה 2: <strong>השמע צליל (Play Sound)</strong> — הוא מנגן את הקול הנשי מיד כשהאייפון נעול בכיס!<br>
             <small class="muted-small">(מומלץ לפני הפעלת הצליל להוסיף גם <strong>הגדר עוצמת שמע (Set Volume)</strong> ל-100%, ואופציונלית להוסיף בהתחלה <strong>קבל מיקום נוכחי</strong> + <code>&amp;lat=...&amp;lon=...</code>).</small>
           </p>
           <p class="muted-small">קישור בדיקת Pre-Beep JSON לשימוש מתקדם:</p>
@@ -668,6 +668,6 @@
     </div>
   </dialog>
 
-  <script type="module" src="./app.js?v=10"></script>
+  <script type="module" src="./app.js?v=11"></script>
 </body>
 </html>
