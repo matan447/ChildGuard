@@ -410,14 +410,16 @@ function readJsonBody(req) {
 }
 
 function handleApi(req, res, reqUrl) {
+  const pathname = reqUrl.pathname;
   const configuredPin = sanitizePin(loadFamilyPin());
   const rawProvidedPin = req.headers['x-family-key'] || reqUrl.searchParams.get('pin') || '';
   const providedPin = sanitizePin(rawProvidedPin);
   const reqFormat = reqUrl.searchParams.get('format') || 'json';
+  const isAudioPath = pathname.endsWith('.wav') || pathname.endsWith('.mp3');
 
   if (configuredPin) {
     if (!providedPin || !timingSafeEqualStr(providedPin, configuredPin)) {
-      if (reqFormat === 'text' || reqFormat === 'audio') {
+      if (reqFormat === 'text' || reqFormat === 'audio' || reqFormat === 'wav' || reqFormat === 'mp3' || isAudioPath) {
         sendText(res, 401, 'Unauthorized');
       } else {
         sendJson(res, 401, { error: 'קוד משפחה סודי נדרש או שגוי (Unauthorized)', pinRequired: true });
@@ -427,7 +429,6 @@ function handleApi(req, res, reqUrl) {
   }
 
   cleanExpiredTimers(familyState);
-  const pathname = reqUrl.pathname;
 
   if (req.method === 'GET' && pathname === '/api/state') {
     const publicCopy = {
@@ -492,8 +493,23 @@ function handleApi(req, res, reqUrl) {
     return true;
   }
 
-  if (req.method === 'GET' && pathname === '/api/shortcut/exit') {
+  const isExitShortcutRoute =
+    pathname === '/api/shortcut/exit' ||
+    pathname === '/api/shortcut/exit.wav' ||
+    pathname === '/api/shortcut/exit.mp3';
+
+  if (req.method === 'GET' && isExitShortcutRoute) {
     const format = reqUrl.searchParams.get('format') || 'json';
+    let audioExt = '';
+    let contentType = '';
+    if (pathname === '/api/shortcut/exit.wav' || format === 'wav') {
+      audioExt = 'wav';
+      contentType = 'audio/wav';
+    } else if (pathname === '/api/shortcut/exit.mp3' || format === 'audio' || format === 'mp3') {
+      audioExt = 'mp3';
+      contentType = 'audio/mpeg';
+    }
+
     const driverName = resolveShortcutDriverName(familyState, reqUrl.searchParams.get('role'));
     const result = evaluateTripEnd(
       familyState,
@@ -507,18 +523,19 @@ function handleApi(req, res, reqUrl) {
       { enforcePrecheck: true, autoMarkMorningDropoff: true }
     );
     saveFamilyState(familyState);
-    if (format === 'audio') {
-      const audioFile = result.suppressed
-        ? 'silence.mp3'
+    if (audioExt) {
+      const baseName = result.suppressed
+        ? 'silence'
         : result.brokenRoutine
-          ? 'alert-broken-routine.mp3'
-          : 'alert-stop.mp3';
-      const filePath = path.join(ROOT_DIR, 'assets', 'audio', audioFile);
+          ? 'alert-broken-routine'
+          : 'alert-stop';
+      const filePath = path.join(ROOT_DIR, 'assets', 'audio', `${baseName}.${audioExt}`);
       const buf = fs.readFileSync(filePath);
       res.writeHead(200, {
-        'Content-Type': 'audio/mpeg',
+        'Content-Type': contentType,
         'Content-Length': buf.length,
-        'Content-Disposition': 'inline; filename="childguard-alert.mp3"',
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': `inline; filename="exit.${audioExt}"`,
         'Cache-Control': 'no-store'
       });
       res.end(buf);

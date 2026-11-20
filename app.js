@@ -2973,7 +2973,7 @@ function renderQrStickerAndUrls() {
   const baseUrl = window.location.origin + window.location.pathname;
   const pin = sanitizeFamilyPin(appState.settings.familyPin);
   const displayPin = pin || 'YOUR_SECRET_PIN';
-  els.endTriggerUrl.textContent = `${window.location.origin}/api/shortcut/exit?pin=${encodeURIComponent(displayPin)}&format=audio`;
+  els.endTriggerUrl.textContent = `${window.location.origin}/api/shortcut/exit.wav?pin=${encodeURIComponent(displayPin)}`;
   els.startTriggerUrl.textContent = `${window.location.origin}/api/shortcut/start?pin=${encodeURIComponent(displayPin)}&format=text`;
   els.prebeepCheckUrl.textContent = `${window.location.origin}/api/should-alarm?pin=${encodeURIComponent(displayPin)}`;
   els.guestDriverUrl.textContent = pin ? `${baseUrl}?role=guest&pin=${encodeURIComponent(pin)}` : `${baseUrl}?role=guest`;

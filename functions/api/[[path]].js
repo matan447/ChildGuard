@@ -467,10 +467,11 @@ export async function onRequest(context) {
   const rawProvidedPin = request.headers.get('x-family-key') || url.searchParams.get('pin') || '';
   const providedPin = sanitizePin(rawProvidedPin);
   const reqFormat = url.searchParams.get('format') || 'json';
+  const isAudioPath = pathname.endsWith('.wav') || pathname.endsWith('.mp3');
 
   if (configuredPin) {
     if (!providedPin || !timingSafeEqualStr(providedPin, configuredPin)) {
-      if (reqFormat === 'text' || reqFormat === 'audio') {
+      if (reqFormat === 'text' || reqFormat === 'audio' || reqFormat === 'wav' || reqFormat === 'mp3' || isAudioPath) {
         return textResponse('Unauthorized', 401);
       }
       return jsonResponse({ error: 'קוד משפחה סודי נדרש או שגוי (Unauthorized)', pinRequired: true }, 401);
@@ -537,8 +538,23 @@ export async function onRequest(context) {
     return jsonResponse({ ok: true, state: 'DRIVING', originPlace: originPlace?.id || null });
   }
 
-  if (request.method === 'GET' && pathname === '/api/shortcut/exit') {
+  const isExitShortcutRoute =
+    pathname === '/api/shortcut/exit' ||
+    pathname === '/api/shortcut/exit.wav' ||
+    pathname === '/api/shortcut/exit.mp3';
+
+  if (request.method === 'GET' && isExitShortcutRoute) {
     const format = url.searchParams.get('format') || 'json';
+    let audioExt = '';
+    let contentType = '';
+    if (pathname === '/api/shortcut/exit.wav' || format === 'wav') {
+      audioExt = 'wav';
+      contentType = 'audio/wav';
+    } else if (pathname === '/api/shortcut/exit.mp3' || format === 'audio' || format === 'mp3') {
+      audioExt = 'mp3';
+      contentType = 'audio/mpeg';
+    }
+
     const driverName = resolveShortcutDriverName(familyState, url.searchParams.get('role'));
     const result = evaluateTripEnd(
       familyState,
@@ -552,19 +568,22 @@ export async function onRequest(context) {
       { enforcePrecheck: true, autoMarkMorningDropoff: true }
     );
     await saveState(env, familyState, reqPin);
-    if (format === 'audio') {
-      const audioFile = result.suppressed
-        ? 'silence.mp3'
+    if (audioExt) {
+      const baseName = result.suppressed
+        ? 'silence'
         : result.brokenRoutine
-          ? 'alert-broken-routine.mp3'
-          : 'alert-stop.mp3';
-      const assetUrl = new URL(`/assets/audio/${audioFile}`, request.url);
+          ? 'alert-broken-routine'
+          : 'alert-stop';
+      const assetUrl = new URL(`/assets/audio/${baseName}.${audioExt}`, request.url);
       const assetRes = env?.ASSETS ? await env.ASSETS.fetch(assetUrl) : await fetch(assetUrl);
-      return new Response(assetRes.body, {
+      const audioBuf = await assetRes.arrayBuffer();
+      return new Response(audioBuf, {
         status: assetRes.ok ? 200 : 502,
         headers: {
-          'Content-Type': 'audio/mpeg',
-          'Content-Disposition': 'inline; filename="childguard-alert.mp3"',
+          'Content-Type': contentType,
+          'Content-Length': String(audioBuf.byteLength),
+          'Accept-Ranges': 'bytes',
+          'Content-Disposition': `inline; filename="exit.${audioExt}"`,
           'Cache-Control': 'no-store'
         }
       });
