@@ -958,15 +958,14 @@ async function apiPostEvent(type, payload = {}) {
         type,
         driverName: getCurrentDriverName(),
         savedVolumePct: appState.settings.savedVolumePct,
-        clientPlaces: appState.settings.savedPlaces,
-        placesUpdatedAt: appState.settings.placesUpdatedAt,
         ...payload
       })
     });
     if (!res.ok) return null;
     const data = await res.json();
     if (data.state) {
-      applyRemoteState(data.state);
+      const forceSync = ['ADD_PLACE', 'UPDATE_PLACE', 'DELETE_PLACE', 'RESET_PLACES', 'UPDATE_PROFILES'].includes(type);
+      applyRemoteState(data.state, { forceAcceptRemote: forceSync });
       syncToFirestore(data.state);
     }
     return data;
@@ -2727,20 +2726,31 @@ function renderPlaces(force = false) {
     const saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'btn-primary btn-sm place-save-btn';
-    saveBtn.textContent = '🔍 חפש כתובת ושמור';
-    saveBtn.addEventListener('click', async () => {
+    saveBtn.textContent = '💾 שמור / אתר כתובת';
+
+    const savePlaceEdits = async ({ forceGeocode = false } = {}) => {
       const newName = nameInput.value.trim() || p.name;
+      const prevAddr = (p.address || '').trim();
       const newAddr = addrInput.value.trim();
+      const nameChanged = newName !== p.name;
+      const addrChanged = newAddr !== prevAddr;
+      const hasDefaultCoords =
+        Math.abs(Number(p.lat) - 32.0853) < 0.0005 && Math.abs(Number(p.lon) - 34.7818) < 0.0005;
+
+      if (!nameChanged && !addrChanged && !forceGeocode) {
+        return;
+      }
+
       let newLat = p.lat;
       let newLon = p.lon;
       let geoNote = '';
 
-      if (newAddr) {
+      if (newAddr && (addrChanged || (forceGeocode && hasDefaultCoords) || (forceGeocode && !nameChanged))) {
         saveBtn.textContent = 'מחפש...';
         saveBtn.disabled = true;
         const geo = await geocodeAddress(newAddr);
         saveBtn.disabled = false;
-        saveBtn.textContent = '🔍 חפש כתובת ושמור';
+        saveBtn.textContent = '💾 שמור / אתר כתובת';
         if (geo) {
           newLat = geo.lat;
           newLon = geo.lon;
@@ -2767,7 +2777,19 @@ function renderPlaces(force = false) {
         lat: newLat,
         lon: newLon
       });
-    });
+    };
+
+    saveBtn.addEventListener('click', () => savePlaceEdits({ forceGeocode: true }));
+    nameInput.addEventListener('change', () => savePlaceEdits({ forceGeocode: false }));
+    addrInput.addEventListener('change', () => savePlaceEdits({ forceGeocode: true }));
+    for (const inp of [nameInput, addrInput]) {
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          savePlaceEdits({ forceGeocode: e.target === addrInput });
+        }
+      });
+    }
 
     const gpsBtn = document.createElement('button');
     gpsBtn.type = 'button';
@@ -3203,7 +3225,15 @@ function bindEvents() {
     els.newPlaceAddress.value = '';
     renderPlaces(true);
     showPlacesFeedback(`✅ נוסף מקום חדש: "${name}" — ${address}${geoNote}`);
-    await apiPostEvent('ADD_PLACE', { placeId: requestedId || undefined, icon, name, address, lat, lon });
+    await apiPostEvent('ADD_PLACE', {
+      clientPlaceId: newPlace.id,
+      placeId: requestedId || undefined,
+      icon,
+      name,
+      address,
+      lat,
+      lon
+    });
   });
 
   if (els.resetPlacesBtn) {

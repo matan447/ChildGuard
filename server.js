@@ -640,23 +640,6 @@ function handleApi(req, res, reqUrl) {
         const timeStr = nowTimeHe();
         let meta = {};
 
-        if (Array.isArray(payload.clientPlaces)) {
-          const clientPlacesMs = Date.parse(payload.placesUpdatedAt || '') || 0;
-          const serverPlacesMs = Date.parse(familyState.placesUpdatedAt || '') || 0;
-          if (clientPlacesMs >= serverPlacesMs && clientPlacesMs > 0) {
-            familyState.savedPlaces = payload.clientPlaces.slice(0, 20).map((p) => ({
-              id: String(p.id || 'p_' + now).slice(0, 48),
-              icon: String(p.icon || '📍').slice(0, 16),
-              name: String(p.name || 'מקום').slice(0, 48),
-              address: String(p.address || '').slice(0, 120),
-              lat: typeof p.lat === 'number' && Number.isFinite(p.lat) ? p.lat : 32.0853,
-              lon: typeof p.lon === 'number' && Number.isFinite(p.lon) ? p.lon : 34.7818,
-              radiusM: typeof p.radiusM === 'number' && Number.isFinite(p.radiusM) ? p.radiusM : 150
-            }));
-            familyState.placesUpdatedAt = payload.placesUpdatedAt;
-          }
-        }
-
         switch (payload.type) {
           case 'TRIP_START': {
             applyTripStart(familyState, payload, driverName);
@@ -815,15 +798,19 @@ function handleApi(req, res, reqUrl) {
                   ? payload.placeId
                   : '';
               const idTaken = requestedId && familyState.savedPlaces.some((p) => p.id === requestedId);
-              familyState.savedPlaces.push({
-                id: requestedId && !idTaken ? requestedId : 'p_' + now,
-                icon: (typeof payload.icon === 'string' && payload.icon.trim()) || '📍',
-                name,
-                address: typeof payload.address === 'string' ? payload.address.trim().slice(0, 120) : '',
-                lat: typeof payload.lat === 'number' && Number.isFinite(payload.lat) ? payload.lat : 32.0853,
-                lon: typeof payload.lon === 'number' && Number.isFinite(payload.lon) ? payload.lon : 34.7818,
-                radiusM: 150
-              });
+              const clientId = String(payload.clientPlaceId || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 48);
+              const newId = requestedId && !idTaken ? requestedId : clientId || 'p_' + now;
+              if (!familyState.savedPlaces.some((p) => p.id === newId)) {
+                familyState.savedPlaces.push({
+                  id: newId,
+                  icon: (typeof payload.icon === 'string' && payload.icon.trim()) || '📍',
+                  name,
+                  address: typeof payload.address === 'string' ? payload.address.trim().slice(0, 120) : '',
+                  lat: typeof payload.lat === 'number' && Number.isFinite(payload.lat) ? payload.lat : 32.0853,
+                  lon: typeof payload.lon === 'number' && Number.isFinite(payload.lon) ? payload.lon : 34.7818,
+                  radiusM: typeof payload.radiusM === 'number' && Number.isFinite(payload.radiusM) ? payload.radiusM : 150
+                });
+              }
               const nowIso = new Date().toISOString();
               familyState.placesUpdatedAt = nowIso;
               cs.updatedAt = nowIso;
