@@ -11,7 +11,7 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" type="image/svg+xml" href="./icon.svg">
   <link rel="apple-touch-icon" href="./icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=9">
+  <link rel="stylesheet" href="./styles.css?v=10">
 </head>
 <body>
   <div id="security-banner" class="context-banner" hidden>
@@ -611,29 +611,26 @@
 
       <div class="guide-steps">
         <article class="guide-step">
-          <h3>למה שגיאת "האייפון נעול" קרתה, ואיך פותרים אותה לגמרי?</h3>
+          <h3>2 פעולות פשוטות באייפון — בלי תנאי <code>אם</code> ובלי לפתוח את המסך!</h3>
           <p>
-            הפעולה <strong>פתח כתובת אינטרנט (Open URLs)</strong> מנסה לפתוח את Safari, ואפל חוסמת זאת כשהמסך נעול. הפתרון: באוטומציה באייפון משתמשים בפעולה <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> — שעובדת ברקע <strong>100% גם כשהאייפון נעול בכיס!</strong>
+            בחר בפעולה <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> — שים לב: <strong>כתובת אינטרנט</strong> ולא <em>"עמוד אינטרנט"</em>!<br>
+            הקישור ליציאה מחזיר ישירות <strong>קובץ שמע MP3 בקול הנשי של Gemini</strong> כשנדרשת בדיקה — או שתיקה של 0.15 שנייה כשאתה לבד (בלי צורך בשום תנאי <code>אם</code>!).
           </p>
         </article>
 
         <article class="guide-step">
-          <h3>שלב 1 – אוטומציית יציאה מהרכב (עובדת כשהאייפון נעול!)</h3>
+          <h3>שלב 1 – אוטומציית יציאה מהרכב (2 פעולות בלבד, עובדת כשהאייפון נעול!)</h3>
           <p>
-            1. פתח באייפון <strong>קיצורי דרך (Shortcuts)</strong> ← <strong>אוטומציה</strong> ← <strong>+</strong> ← <strong>CarPlay / Bluetooth</strong> (בחר שמע רכב) ← סמן <strong>מתנתק (Is Disconnected)</strong> + <strong>הפעל מיד (Run Immediately)</strong> ← <strong>אוטומציה ריקה חדשה</strong>.<br>
-            2. הוסף פעולה <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> והדבק שם את הקישור הבא:<br>
-            <small class="muted-small">(רשות מתקדמת: ניתן להוסיף קודם <strong>קבל מיקום נוכחי / Get Current Location</strong> ולשרשר <code>&amp;lat=[Latitude]&amp;lon=[Longitude]</code> לקישור).</small>
+            1. באייפון: <strong>קיצורי דרך (Shortcuts)</strong> ← <strong>אוטומציה</strong> ← <strong>+</strong> ← <strong>CarPlay / Bluetooth</strong> ← סמן <strong>מתנתק (Is Disconnected)</strong> + <strong>הפעל מיד (Run Immediately)</strong> ← <strong>אוטומציה ריקה חדשה</strong>.<br>
+            2. הוסף פעולה 1: <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> והדבק קישור זה:
           </p>
           <div class="copy-url-row">
             <code id="end-trigger-url" dir="ltr"></code>
             <button type="button" class="btn-secondary btn-sm copy-btn" data-copy-target="end-trigger-url">העתק</button>
           </div>
           <p>
-            3. הוסף פעולה <strong>אם (If)</strong> על התוצאה ← <strong>יש ערך כלשהו (has any value)</strong>:<br>
-            &nbsp;&nbsp;• <strong>הגדר עוצמת שמע (Set Volume)</strong> ל-<strong>100%</strong><br>
-            &nbsp;&nbsp;• <strong>הקרא טקסט (Speak Text)</strong> על התוצאה מהקישור<br>
-            &nbsp;&nbsp;• <strong>הצג התראה (Show Notification)</strong> + <strong>הרטט את המכשיר (Vibrate Device)</strong><br>
-            <em>אם נסעת לבד / אחרי גן / מיטבתה השרת מחזיר ריק — ולא יהיה שום צפצוף!</em>
+            3. הוסף מיד מתחתיו פעולה 2: <strong>הפעל צליל (Play Sound)</strong> — הוא מנגן את הקול הנשי מיד כשהאייפון נעול בכיס!<br>
+            <small class="muted-small">(מומלץ לפני הפעלת הצליל להוסיף גם <strong>הגדר עוצמת שמע (Set Volume)</strong> ל-100%, ואופציונלית להוסיף בהתחלה <strong>קבל מיקום נוכחי</strong> + <code>&amp;lat=...&amp;lon=...</code>).</small>
           </p>
           <p class="muted-small">קישור בדיקת Pre-Beep JSON לשימוש מתקדם:</p>
           <div class="copy-url-row">
@@ -643,9 +640,9 @@
         </article>
 
         <article class="guide-step">
-          <h3>שלב 2 – אוטומציית כניסה לרכב (עובדת כשהאייפון נעול!)</h3>
+          <h3>שלב 2 – אוטומציית כניסה לרכב (שקטה לגמרי, עובדת כשהאייפון נעול!)</h3>
           <p>
-            אותו דבר ב-<strong>מתחבר (Is Connected)</strong> + <strong>הפעל מיד</strong> ← הוסף רק את הפעולה השקטה <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> (לא "פתח כתובת אינטרנט"!) עם הקישור הבא:
+            אותו דבר ב-<strong>מתחבר (Is Connected)</strong> + <strong>הפעל מיד</strong> ← הוסף רק את הפעולה השקטה <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> עם הקישור הבא:
           </p>
           <div class="copy-url-row">
             <code id="start-trigger-url" dir="ltr"></code>
@@ -671,6 +668,6 @@
     </div>
   </dialog>
 
-  <script type="module" src="./app.js?v=9"></script>
+  <script type="module" src="./app.js?v=10"></script>
 </body>
 </html>

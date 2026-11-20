@@ -439,6 +439,23 @@ function handleApi(req, res, reqUrl) {
       { enforcePrecheck: true }
     );
     saveFamilyState(familyState);
+    if (format === 'audio') {
+      const audioFile = result.suppressed
+        ? 'silence.mp3'
+        : result.brokenRoutine
+          ? 'alert-broken-routine.mp3'
+          : 'alert-stop.mp3';
+      const filePath = path.join(ROOT_DIR, 'assets', 'audio', audioFile);
+      const buf = fs.readFileSync(filePath);
+      res.writeHead(200, {
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': buf.length,
+        'Content-Disposition': 'inline; filename="childguard-alert.mp3"',
+        'Cache-Control': 'no-store'
+      });
+      res.end(buf);
+      return true;
+    }
     if (result.suppressed) {
       if (format === 'text') sendText(res, 200, '');
       else sendJson(res, 200, { ok: true, alarmRequired: false, reason: result.suppressReason, speakText: '' });

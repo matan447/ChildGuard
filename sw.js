@@ -1,9 +1,9 @@
-const CACHE_NAME = 'childguard-v9';
+const CACHE_NAME = 'childguard-v10';
 const CORE_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=9',
-  './app.js?v=9',
+  './styles.css?v=10',
+  './app.js?v=10',
   './firebase-config.js',
   './manifest.json',
   './icon.svg',
@@ -13,7 +13,8 @@ const CORE_ASSETS = [
   './assets/audio/alert-stop.mp3',
   './assets/audio/alert-broken-routine.mp3',
   './assets/audio/alert-low-battery.mp3',
-  './assets/audio/alert-heatwave.mp3'
+  './assets/audio/alert-heatwave.mp3',
+  './assets/audio/silence.mp3'
 ];
 
 self.addEventListener('install', (event) => {

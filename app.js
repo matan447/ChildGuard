@@ -2935,7 +2935,7 @@ function renderQrStickerAndUrls() {
   els.stickerQrContainer.innerHTML = QR.toSvg(QR_PAYLOAD);
   const baseUrl = window.location.origin + window.location.pathname;
   const pin = sanitizeFamilyPin(appState.settings.familyPin);
-  els.endTriggerUrl.textContent = `${window.location.origin}/api/shortcut/exit?pin=${encodeURIComponent(pin)}&format=text`;
+  els.endTriggerUrl.textContent = `${window.location.origin}/api/shortcut/exit?pin=${encodeURIComponent(pin)}&format=audio`;
   els.startTriggerUrl.textContent = `${window.location.origin}/api/shortcut/start?pin=${encodeURIComponent(pin)}&format=text`;
   els.prebeepCheckUrl.textContent = `${window.location.origin}/api/should-alarm?pin=${encodeURIComponent(pin)}`;
   els.guestDriverUrl.textContent = `${baseUrl}?role=guest`;

@@ -492,6 +492,23 @@ export async function onRequest(context) {
       { enforcePrecheck: true }
     );
     await saveState(env, familyState, reqPin);
+    if (format === 'audio') {
+      const audioFile = result.suppressed
+        ? 'silence.mp3'
+        : result.brokenRoutine
+          ? 'alert-broken-routine.mp3'
+          : 'alert-stop.mp3';
+      const assetUrl = new URL(`/assets/audio/${audioFile}`, request.url);
+      const assetRes = env?.ASSETS ? await env.ASSETS.fetch(assetUrl) : await fetch(assetUrl);
+      return new Response(assetRes.body, {
+        status: assetRes.ok ? 200 : 502,
+        headers: {
+          'Content-Type': 'audio/mpeg',
+          'Content-Disposition': 'inline; filename="childguard-alert.mp3"',
+          'Cache-Control': 'no-store'
+        }
+      });
+    }
     if (result.suppressed) {
       if (format === 'text') return textResponse('');
       return jsonResponse({ ok: true, alarmRequired: false, reason: result.suppressReason, speakText: '' });
