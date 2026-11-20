@@ -2934,9 +2934,10 @@ function renderHistory() {
 function renderQrStickerAndUrls() {
   els.stickerQrContainer.innerHTML = QR.toSvg(QR_PAYLOAD);
   const baseUrl = window.location.origin + window.location.pathname;
-  els.endTriggerUrl.textContent = `${baseUrl}?trigger=car_exit`;
-  els.startTriggerUrl.textContent = `${baseUrl}?action=start_drive`;
-  els.prebeepCheckUrl.textContent = `${window.location.origin}/api/should-alarm`;
+  const pin = sanitizeFamilyPin(appState.settings.familyPin);
+  els.endTriggerUrl.textContent = `${window.location.origin}/api/shortcut/exit?pin=${encodeURIComponent(pin)}&format=text`;
+  els.startTriggerUrl.textContent = `${window.location.origin}/api/shortcut/start?pin=${encodeURIComponent(pin)}&format=text`;
+  els.prebeepCheckUrl.textContent = `${window.location.origin}/api/should-alarm?pin=${encodeURIComponent(pin)}`;
   els.guestDriverUrl.textContent = `${baseUrl}?role=guest`;
 }
 
@@ -3278,6 +3279,7 @@ function bindEvents() {
     appState.settings.familyPin = sanitizeFamilyPin(els.familyPinInput.value);
     els.familyPinInput.value = appState.settings.familyPin;
     saveSettings();
+    renderQrStickerAndUrls();
     await apiPostEvent('UPDATE_PIN', { newPin: appState.settings.familyPin });
     initFirebaseSync();
   });

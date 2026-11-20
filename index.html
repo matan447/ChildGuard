@@ -11,7 +11,7 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" type="image/svg+xml" href="./icon.svg">
   <link rel="apple-touch-icon" href="./icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=8">
+  <link rel="stylesheet" href="./styles.css?v=9">
 </head>
 <body>
   <div id="security-banner" class="context-banner" hidden>
@@ -611,26 +611,31 @@
 
       <div class="guide-steps">
         <article class="guide-step">
-          <h3>איך האוטומציה עובדת?</h3>
+          <h3>למה שגיאת "האייפון נעול" קרתה, ואיך פותרים אותה לגמרי?</h3>
           <p>
-            <strong>1. כשהאפליקציה פתוחה:</strong> ניטור ה-GPS מתחיל אוטומטית מיד עם הפתיחה — אין צורך ללחוץ על כלום.<br>
-            <strong>2. כשהמסך נעול או האפליקציה סגורה:</strong> iOS חוסמת אתרי דפדפן מלהתעורר לבד ברקע, ולכן מחברים פעם אחת את אפליקציית <strong>קיצורי דרך (Shortcuts)</strong> המובנית באייפון ל-Bluetooth / CarPlay של הרכב:
+            הפעולה <strong>פתח כתובת אינטרנט (Open URLs)</strong> מנסה לפתוח את Safari, ואפל חוסמת זאת כשהמסך נעול. הפתרון: באוטומציה באייפון משתמשים בפעולה <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> — שעובדת ברקע <strong>100% גם כשהאייפון נעול בכיס!</strong>
           </p>
         </article>
 
         <article class="guide-step">
-          <h3>שלב 1 – אוטומציה ליציאה מהרכב (הכי חשוב!)</h3>
+          <h3>שלב 1 – אוטומציית יציאה מהרכב (עובדת כשהאייפון נעול!)</h3>
           <p>
-            1. פתח באייפון את אפליקציית <strong>קיצורי דרך (Shortcuts)</strong> ← לחץ למטה על <strong>אוטומציה (Automation)</strong> ← לחץ על <strong>+</strong> למעלה.<br>
-            2. בחר <strong>CarPlay</strong> (או <strong>Bluetooth</strong> ← בחר את שמע הרכב שלך).<br>
-            3. סמן <strong>מתנתק (Is Disconnected)</strong> וסמן <strong>הפעל מיד (Run Immediately)</strong> ← לחץ <strong>הבא</strong>.<br>
-            4. בחר <strong>אוטומציה ריקה חדשה (New Blank Automation)</strong> ← הוסף פעולה <strong>פתח כתובת אינטרנט (Open URLs)</strong> ← והדבק שם את הקישור הבא:
+            1. פתח באייפון <strong>קיצורי דרך (Shortcuts)</strong> ← <strong>אוטומציה</strong> ← <strong>+</strong> ← <strong>CarPlay / Bluetooth</strong> (בחר שמע רכב) ← סמן <strong>מתנתק (Is Disconnected)</strong> + <strong>הפעל מיד (Run Immediately)</strong> ← <strong>אוטומציה ריקה חדשה</strong>.<br>
+            2. הוסף פעולה <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> והדבק שם את הקישור הבא:<br>
+            <small class="muted-small">(רשות מתקדמת: ניתן להוסיף קודם <strong>קבל מיקום נוכחי / Get Current Location</strong> ולשרשר <code>&amp;lat=[Latitude]&amp;lon=[Longitude]</code> לקישור).</small>
           </p>
           <div class="copy-url-row">
             <code id="end-trigger-url" dir="ltr"></code>
             <button type="button" class="btn-secondary btn-sm copy-btn" data-copy-target="end-trigger-url">העתק</button>
           </div>
-          <p class="muted-small">טיפ למומחים – קישור Pre-Beep Check (מאפשר לאוטומציה לבדוק תחילה אם סימנת "הורדה בגן" או "מוסך" ולא לצפצף לשווא):</p>
+          <p>
+            3. הוסף פעולה <strong>אם (If)</strong> על התוצאה ← <strong>יש ערך כלשהו (has any value)</strong>:<br>
+            &nbsp;&nbsp;• <strong>הגדר עוצמת שמע (Set Volume)</strong> ל-<strong>100%</strong><br>
+            &nbsp;&nbsp;• <strong>הקרא טקסט (Speak Text)</strong> על התוצאה מהקישור<br>
+            &nbsp;&nbsp;• <strong>הצג התראה (Show Notification)</strong> + <strong>הרטט את המכשיר (Vibrate Device)</strong><br>
+            <em>אם נסעת לבד / אחרי גן / מיטבתה השרת מחזיר ריק — ולא יהיה שום צפצוף!</em>
+          </p>
+          <p class="muted-small">קישור בדיקת Pre-Beep JSON לשימוש מתקדם:</p>
           <div class="copy-url-row">
             <code id="prebeep-check-url" dir="ltr"></code>
             <button type="button" class="btn-secondary btn-sm copy-btn" data-copy-target="prebeep-check-url">העתק</button>
@@ -638,9 +643,9 @@
         </article>
 
         <article class="guide-step">
-          <h3>שלב 2 – אוטומציה שקטה לכניסה לרכב (אופציונלי מומלץ)</h3>
+          <h3>שלב 2 – אוטומציית כניסה לרכב (עובדת כשהאייפון נעול!)</h3>
           <p>
-            באופן דומה: <strong>אוטומציה</strong> ← <strong>+</strong> ← <strong>CarPlay / Bluetooth</strong> ← סמן <strong>מתחבר (Is Connected)</strong> + <strong>הפעל מיד (Run Immediately)</strong> ← <strong>פתח כתובת אינטרנט (Open URLs)</strong> ← הדבק קישור זה כדי להתחיל ניטור אוטומטית בכל כניסה לרכב:
+            אותו דבר ב-<strong>מתחבר (Is Connected)</strong> + <strong>הפעל מיד</strong> ← הוסף רק את הפעולה השקטה <strong>קבל תוכן של כתובת אינטרנט (Get Contents of URL)</strong> (לא "פתח כתובת אינטרנט"!) עם הקישור הבא:
           </p>
           <div class="copy-url-row">
             <code id="start-trigger-url" dir="ltr"></code>
@@ -666,6 +671,6 @@
     </div>
   </dialog>
 
-  <script type="module" src="./app.js?v=8"></script>
+  <script type="module" src="./app.js?v=9"></script>
 </body>
 </html>
