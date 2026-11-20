@@ -335,6 +335,7 @@ const DEFAULT_SETTINGS = {
 
 const appState = {
   status: 'IDLE', // IDLE | MONITORING | DRIVING | STOPPING | REFUEL_PAUSE | ALARM_ACTIVE | VERIFIED
+  pinAuthState: 'UNKNOWN', // UNKNOWN | MISSING | UNAUTHORIZED | OK
   settings: loadSettings(),
   history: loadHistory(),
   coupleState: null,
@@ -526,6 +527,8 @@ const els = {
   contactNameInput: document.getElementById('contact-name-input'),
   contactPhoneInput: document.getElementById('contact-phone-input'),
   familyPinInput: document.getElementById('family-pin-input'),
+  connectPinBtn: document.getElementById('connect-pin-btn'),
+  pinStatusFeedback: document.getElementById('pin-status-feedback'),
   historyList: document.getElementById('history-list'),
   clearHistoryBtn: document.getElementById('clear-history-btn'),
 
@@ -648,21 +651,25 @@ function isDefaultColdSeed(data) {
   );
 }
 
-function applyRemoteState(data) {
+function applyRemoteState(data, { forceAcceptRemote = false } = {}) {
   if (!data || typeof data !== 'object') return;
   const remoteUpdatedMs = Date.parse(data?.coupleStatus?.updatedAt || data?.updatedAt || '') || 0;
   const localUpdatedMs = Date.parse(appState.settings.localUpdatedAt || '') || 0;
   const localPlacesMs = Date.parse(appState.settings.placesUpdatedAt || '') || 0;
   const remotePlacesMs = Date.parse(data?.placesUpdatedAt || '') || 0;
   const isCold = isDefaultColdSeed(data);
-  const remoteIsStale = (localUpdatedMs > 0 && remoteUpdatedMs > 0 && remoteUpdatedMs + 500 < localUpdatedMs) || (localUpdatedMs > 0 && isCold);
+  const remoteIsStale = forceAcceptRemote
+    ? false
+    : (localUpdatedMs > 0 && remoteUpdatedMs > 0 && remoteUpdatedMs + 500 < localUpdatedMs) || (localUpdatedMs > 0 && isCold);
 
   const shouldApplyRemotePlaces =
     Array.isArray(data.savedPlaces) &&
-    !remoteIsStale &&
-    (remotePlacesMs > localPlacesMs + 500 ||
-      (remotePlacesMs === 0 && remoteUpdatedMs > localPlacesMs + 1500 && !isCold) ||
-      (localPlacesMs === 0 && !isCold));
+    !isCold &&
+    (forceAcceptRemote ||
+      (!remoteIsStale &&
+        (remotePlacesMs > localPlacesMs + 500 ||
+          (remotePlacesMs === 0 && remoteUpdatedMs > localPlacesMs + 1500) ||
+          localPlacesMs === 0)));
 
   appState.coupleState = {
     ...data,
@@ -678,41 +685,69 @@ function applyRemoteState(data) {
     savedPlaces: shouldApplyRemotePlaces ? data.savedPlaces : appState.settings.savedPlaces
   };
 
+  const profilesChanged =
+    Boolean(data.profiles) &&
+    ((data.profiles.myName && data.profiles.myName !== appState.settings.myName) ||
+      (data.profiles.partnerName && data.profiles.partnerName !== appState.settings.partnerName) ||
+      (data.profiles.guestName && data.profiles.guestName !== appState.settings.guestName));
+
   if (
     !remoteIsStale &&
+    !isCold &&
     data.profiles &&
-    (!isCold && (data.profiles.myName !== 'אלון' || data.profiles.partnerName !== 'דנה' || data.profiles.guestName !== 'סבא/סבתא' || remoteUpdatedMs > localUpdatedMs))
+    (forceAcceptRemote || profilesChanged) &&
+    (forceAcceptRemote ||
+      data.profiles.myName !== 'אלון' ||
+      data.profiles.partnerName !== 'דנה' ||
+      data.profiles.guestName !== 'סבא/סבתא' ||
+      remoteUpdatedMs > localUpdatedMs)
   ) {
     const namesBox = document.getElementById('couple-names-box');
-    if (!namesBox || !namesBox.contains(document.activeElement)) {
+    if (forceAcceptRemote || !namesBox || !namesBox.contains(document.activeElement)) {
       const prevPartner = appState.settings.partnerName || 'דנה';
       appState.settings.myName = data.profiles.myName || appState.settings.myName;
       appState.settings.partnerName = data.profiles.partnerName || appState.settings.partnerName;
       appState.settings.guestName = data.profiles.guestName || appState.settings.guestName;
+      if (data?.coupleStatus?.updatedAt || data?.updatedAt) {
+        appState.settings.localUpdatedAt = data?.coupleStatus?.updatedAt || data?.updatedAt;
+      }
       if (!appState.settings.emergencyContactName || appState.settings.emergencyContactName === 'דנה' || appState.settings.emergencyContactName === prevPartner) {
         appState.settings.emergencyContactName = appState.settings.partnerName;
       }
       saveSettings();
-      renderSettingsControls();
+      if (forceAcceptRemote || profilesChanged) {
+        renderSettingsControls();
+      }
     }
   }
-  if (shouldApplyRemotePlaces) {
+
+  const placesChanged =
+    Array.isArray(data.savedPlaces) &&
+    JSON.stringify(data.savedPlaces) !== JSON.stringify(appState.settings.savedPlaces);
+
+  if (shouldApplyRemotePlaces && (forceAcceptRemote || placesChanged)) {
     const placesCard = document.getElementById('places-card');
-    if (!placesCard || !placesCard.contains(document.activeElement)) {
+    if (forceAcceptRemote || !placesCard || !placesCard.contains(document.activeElement)) {
       appState.settings.savedPlaces = data.savedPlaces;
       if (data.placesUpdatedAt) {
         appState.settings.placesUpdatedAt = data.placesUpdatedAt;
       }
       saveSettings();
+      renderPlaces(forceAcceptRemote);
     }
   }
-  if (Array.isArray(data.history) && data.history.length > 0) {
+
+  const historyChanged =
+    Array.isArray(data.history) &&
+    JSON.stringify(data.history) !== JSON.stringify(appState.history);
+
+  if (Array.isArray(data.history) && (forceAcceptRemote || historyChanged)) {
     appState.history = data.history;
     saveHistory();
+    renderHistory();
   }
+
   renderCoupleCard();
-  renderPlaces();
-  renderHistory();
 }
 
 // ============================================================================
@@ -881,28 +916,31 @@ async function initFirebaseSync() {
 // ============================================================================
 // Couple Sync API Client (with Offline Fail-Safe + Firestore Push)
 // ============================================================================
-async function apiFetchState() {
+async function apiFetchState(forceAcceptRemote = false) {
   try {
     const pin = sanitizeFamilyPin(appState.settings.familyPin);
     if (!pin) {
+      appState.pinAuthState = 'MISSING';
       if (els.coupleStatusText) {
         els.coupleStatusText.textContent = '🔒 נדרש קוד משפחה סודי (פתח דרך הקישור הפרטי או הזן בהגדרות)';
       }
-      return null;
+      return { ok: false, status: 0 };
     }
     const res = await fetch(`./api/state?pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
     if (res.status === 401) {
+      appState.pinAuthState = 'UNAUTHORIZED';
       if (els.coupleStatusText) {
         els.coupleStatusText.textContent = '🔒 קוד משפחה סודי שגוי — הזן קוד תקף בהגדרות';
       }
-      return null;
+      return { ok: false, status: 401 };
     }
-    if (!res.ok) return null;
+    if (!res.ok) return { ok: false, status: res.status };
     const data = await res.json();
-    applyRemoteState(data);
-    return data;
+    appState.pinAuthState = 'OK';
+    applyRemoteState(data, { forceAcceptRemote });
+    return { ok: true, status: 200, data };
   } catch {
-    return null;
+    return { ok: false, status: 0 };
   }
 }
 
@@ -2452,36 +2490,50 @@ function formatAssigneeLabel(assignee) {
 }
 
 function renderCoupleCard() {
-  const cs = appState.coupleState?.coupleStatus;
-  if (!cs) {
+  if (appState.pinAuthState === 'MISSING') {
     els.coupleLiveStatus.dataset.state = 'IDLE';
-    els.coupleStatusText.textContent = `מוכן לנסיעה • נהג פעיל: ${getCurrentDriverName()}`;
+    els.coupleStatusText.textContent = '🔒 נדרש קוד משפחה סודי (פתח דרך הקישור הפרטי או הזן בהגדרות)';
+    els.coupleProtectionBanner.hidden = true;
+    els.btnGarageMode.classList.remove('is-on');
+    els.btnSoloNow.classList.remove('is-on');
+  } else if (appState.pinAuthState === 'UNAUTHORIZED') {
+    els.coupleLiveStatus.dataset.state = 'IDLE';
+    els.coupleStatusText.textContent = '🔒 קוד משפחה סודי שגוי — הזן קוד תקף בהגדרות';
     els.coupleProtectionBanner.hidden = true;
     els.btnGarageMode.classList.remove('is-on');
     els.btnSoloNow.classList.remove('is-on');
   } else {
-    els.coupleLiveStatus.dataset.state = cs.state || 'IDLE';
-    els.coupleStatusText.textContent =
-      cs.state === 'IDLE' || !cs.statusText
-        ? `ממתין לנסיעה • נהג פעיל: ${getCurrentDriverName()}`
-        : cs.statusText;
-
-    const now = Date.now();
-    const soloActive = cs.soloContinueUntil > now;
-    const snoozeActive = cs.snoozeUntil > now;
-
-    if (snoozeActive || soloActive) {
-      els.coupleProtectionBanner.hidden = false;
-      const minsLeft = Math.max(1, Math.ceil(((snoozeActive ? cs.snoozeUntil : cs.soloContinueUntil) - now) / 60000));
-      els.coupleProtectionText.textContent = snoozeActive
-        ? `🔧 מצב מוסך/שטיפה פעיל – יחזור אוטומטית בעוד ${minsLeft} דק'`
-        : `🚗 מצב נסיעה לבד / המשך מהגן פעיל (${minsLeft} דק' נותרו) – התראות מושתקות`;
-      els.btnGarageMode.classList.toggle('is-on', snoozeActive);
-      els.btnSoloNow.classList.toggle('is-on', soloActive);
-    } else {
+    const cs = appState.coupleState?.coupleStatus;
+    if (!cs) {
+      els.coupleLiveStatus.dataset.state = 'IDLE';
+      els.coupleStatusText.textContent = `מוכן לנסיעה • נהג פעיל: ${getCurrentDriverName()}`;
       els.coupleProtectionBanner.hidden = true;
       els.btnGarageMode.classList.remove('is-on');
       els.btnSoloNow.classList.remove('is-on');
+    } else {
+      els.coupleLiveStatus.dataset.state = cs.state || 'IDLE';
+      els.coupleStatusText.textContent =
+        cs.state === 'IDLE' || !cs.statusText
+          ? `ממתין לנסיעה • נהג פעיל: ${getCurrentDriverName()}`
+          : cs.statusText;
+
+      const now = Date.now();
+      const soloActive = cs.soloContinueUntil > now;
+      const snoozeActive = cs.snoozeUntil > now;
+
+      if (snoozeActive || soloActive) {
+        els.coupleProtectionBanner.hidden = false;
+        const minsLeft = Math.max(1, Math.ceil(((snoozeActive ? cs.snoozeUntil : cs.soloContinueUntil) - now) / 60000));
+        els.coupleProtectionText.textContent = snoozeActive
+          ? `🔧 מצב מוסך/שטיפה פעיל – יחזור אוטומטית בעוד ${minsLeft} דק'`
+          : `🚗 מצב נסיעה לבד / המשך מהגן פעיל (${minsLeft} דק' נותרו) – התראות מושתקות`;
+        els.btnGarageMode.classList.toggle('is-on', snoozeActive);
+        els.btnSoloNow.classList.toggle('is-on', soloActive);
+      } else {
+        els.coupleProtectionBanner.hidden = true;
+        els.btnGarageMode.classList.remove('is-on');
+        els.btnSoloNow.classList.remove('is-on');
+      }
     }
   }
 
@@ -2911,9 +2963,15 @@ function renderVerificationModes() {
 }
 
 function renderSettingsControls() {
-  els.myNameInput.value = appState.settings.myName || 'אלון';
-  els.partnerNameInput.value = appState.settings.partnerName || 'דנה';
-  els.guestNameInput.value = appState.settings.guestName || 'סבא/סבתא';
+  if (document.activeElement !== els.myNameInput) {
+    els.myNameInput.value = appState.settings.myName || 'אלון';
+  }
+  if (document.activeElement !== els.partnerNameInput) {
+    els.partnerNameInput.value = appState.settings.partnerName || 'דנה';
+  }
+  if (document.activeElement !== els.guestNameInput) {
+    els.guestNameInput.value = appState.settings.guestName || 'סבא/סבתא';
+  }
   syncNamesToUI();
   els.settingAutoDetect.checked = appState.settings.autoDetect;
   els.settingMicrotripFilter.checked = appState.settings.microTripFilter;
@@ -2925,9 +2983,15 @@ function renderSettingsControls() {
   els.settingSpeedThreshold.value = String(appState.settings.speedThresholdKmh);
   els.settingStopDelay.value = String(appState.settings.stopDelaySeconds);
   els.settingEscalationDelay.value = String(appState.settings.escalationDelaySeconds);
-  els.contactNameInput.value = appState.settings.emergencyContactName;
-  els.contactPhoneInput.value = appState.settings.emergencyContactPhone;
-  els.familyPinInput.value = appState.settings.familyPin;
+  if (document.activeElement !== els.contactNameInput) {
+    els.contactNameInput.value = appState.settings.emergencyContactName;
+  }
+  if (document.activeElement !== els.contactPhoneInput) {
+    els.contactPhoneInput.value = appState.settings.emergencyContactPhone;
+  }
+  if (document.activeElement !== els.familyPinInput) {
+    els.familyPinInput.value = appState.settings.familyPin;
+  }
 }
 
 function renderHistory() {
@@ -3082,6 +3146,7 @@ function bindEvents() {
       stampLocalUpdate();
       syncNamesToUI();
     });
+    inp.addEventListener('change', () => applyCoupleNames(true));
   }
 
   els.addPlaceForm.addEventListener('submit', async (e) => {
@@ -3313,13 +3378,68 @@ function bindEvents() {
     appState.settings.emergencyContactPhone = els.contactPhoneInput.value;
     saveSettings();
   });
-  els.familyPinInput.addEventListener('change', async () => {
-    appState.settings.familyPin = sanitizeFamilyPin(els.familyPinInput.value);
-    els.familyPinInput.value = appState.settings.familyPin;
+  let pinConnectTimer = null;
+  const connectWithFamilyPin = async () => {
+    clearTimeout(pinConnectTimer);
+    const pin = sanitizeFamilyPin(els.familyPinInput.value);
+    els.familyPinInput.value = pin;
+    const prevPin = appState.settings.familyPin;
+    appState.settings.familyPin = pin;
+    if (pin !== prevPin) {
+      appState.settings.localUpdatedAt = '';
+      appState.settings.placesUpdatedAt = '';
+    }
     saveSettings();
     renderQrStickerAndUrls();
-    await apiFetchState();
-    initFirebaseSync();
+
+    if (!pin) {
+      appState.pinAuthState = 'MISSING';
+      if (els.pinStatusFeedback) {
+        els.pinStatusFeedback.textContent = '🔒 הזן קוד משפחה סודי כדי להתחבר';
+      }
+      renderCoupleCard();
+      return;
+    }
+
+    if (els.pinStatusFeedback) {
+      els.pinStatusFeedback.textContent = '⏳ מתחבר...';
+    }
+    const res = await apiFetchState(true);
+    if (res?.ok) {
+      if (els.pinStatusFeedback) {
+        els.pinStatusFeedback.textContent = `✅ מחובר! נטענו הנתונים של ${appState.settings.myName} ו-${appState.settings.partnerName}`;
+      }
+      initFirebaseSync();
+    } else if (res?.status === 401) {
+      if (els.pinStatusFeedback) {
+        els.pinStatusFeedback.textContent = '❌ קוד שגוי — ודא שאין רווחים או טעות באותיות';
+      }
+    } else if (els.pinStatusFeedback) {
+      els.pinStatusFeedback.textContent = '⚠️ שגיאת תקשורת מול השרת, נסה שוב';
+    }
+  };
+
+  if (els.connectPinBtn) {
+    els.connectPinBtn.addEventListener('click', connectWithFamilyPin);
+  }
+  els.familyPinInput.addEventListener('change', () => {
+    const typed = sanitizeFamilyPin(els.familyPinInput.value);
+    if (typed !== appState.settings.familyPin || appState.pinAuthState !== 'OK') {
+      connectWithFamilyPin();
+    }
+  });
+  els.familyPinInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      connectWithFamilyPin();
+    }
+  });
+  els.familyPinInput.addEventListener('input', () => {
+    clearTimeout(pinConnectTimer);
+    const candidate = sanitizeFamilyPin(els.familyPinInput.value);
+    if (candidate.length >= 12 && candidate !== appState.settings.familyPin) {
+      pinConnectTimer = setTimeout(connectWithFamilyPin, 500);
+    }
   });
 
   els.clearHistoryBtn.addEventListener('click', async () => {
@@ -3407,7 +3527,7 @@ function bindEvents() {
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-      apiFetchState();
+      apiFetchState(false);
       if (['MONITORING', 'DRIVING', 'STOPPING', 'ALARM_ACTIVE'].includes(appState.status)) {
         requestWakeLock();
       }
@@ -3463,6 +3583,8 @@ async function init() {
   const urlPin = sanitizeFamilyPin(params.get('pin'));
   if (urlPin) {
     appState.settings.familyPin = urlPin;
+    appState.settings.localUpdatedAt = '';
+    appState.settings.placesUpdatedAt = '';
     saveSettings();
     params.delete('pin');
     const cleanSearch = params.toString();
@@ -3506,10 +3628,10 @@ async function init() {
     { once: true }
   );
 
-  await apiFetchState();
+  await apiFetchState(Boolean(urlPin));
   initFirebaseSync();
   // Live couple sync poll every 8 seconds (complementing Firestore onSnapshot)
-  appState.pollTimer = setInterval(apiFetchState, 8000);
+  appState.pollTimer = setInterval(() => apiFetchState(false), 8000);
   await handleDeepLinkParams();
 }
 

@@ -11,7 +11,7 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" type="image/svg+xml" href="./icon.svg">
   <link rel="apple-touch-icon" href="./icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=12">
+  <link rel="stylesheet" href="./styles.css?v=13">
 </head>
 <body>
   <div id="security-banner" class="context-banner" hidden>
@@ -421,7 +421,11 @@
         </label>
         <label class="field">
           <span>קוד סודי זוגי (PIN לשרת)</span>
-          <input id="family-pin-input" type="text" dir="ltr" value="" placeholder="הזן קוד משפחה סודי" maxlength="24" autocomplete="off">
+          <div class="copy-url-row">
+            <input id="family-pin-input" type="text" dir="ltr" value="" placeholder="הזן קוד משפחה סודי" maxlength="24" autocomplete="off">
+            <button type="button" id="connect-pin-btn" class="btn-secondary btn-sm">התחבר</button>
+          </div>
+          <small id="pin-status-feedback" class="muted-small" aria-live="polite"></small>
         </label>
       </div>
     </section>
@@ -668,6 +672,6 @@
     </div>
   </dialog>
 
-  <script type="module" src="./app.js?v=12"></script>
+  <script type="module" src="./app.js?v=13"></script>
 </body>
 </html>
