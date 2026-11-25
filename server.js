@@ -220,12 +220,36 @@ function detectPlace(state, lat, lon, explicitPlaceId) {
     return state.savedPlaces.find((p) => p.id === explicitPlaceId) || null;
   }
   if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+  let bestPlace = null;
+  let bestDist = Infinity;
   for (const place of state.savedPlaces) {
-    if (haversineM(lat, lon, place.lat, place.lon) <= (place.radiusM || 150)) {
-      return place;
+    const minRadius = place.id === 'work' ? 2000 : place.id === 'daycare' ? 250 : 150;
+    const effectiveRadius = Math.max(place.radiusM || 150, minRadius);
+    const dist = haversineM(lat, lon, place.lat, place.lon);
+    if (dist <= effectiveRadius && dist < bestDist) {
+      bestDist = dist;
+      bestPlace = place;
     }
   }
-  return null;
+  return bestPlace;
+}
+
+function describeGpsDiagnostic(state, lat, lon, matchedPlace) {
+  if (matchedPlace) return '';
+  if (typeof lat !== 'number' || typeof lon !== 'number') return ' • ללא GPS מהקיצור';
+  let bestPlace = null;
+  let bestDist = Infinity;
+  for (const place of state.savedPlaces || []) {
+    const dist = haversineM(lat, lon, place.lat, place.lon);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestPlace = place;
+    }
+  }
+  if (!bestPlace) return '';
+  return bestDist < 1000
+    ? ` • GPS: ${Math.round(bestDist)} מ' מ${bestPlace.name}`
+    : ` • GPS: ${(bestDist / 1000).toFixed(1)} ק"מ מ${bestPlace.name}`;
 }
 
 function sendJson(res, status, data) {
@@ -252,18 +276,30 @@ function resolveShortcutDriverName(state, roleParam) {
 }
 
 function parseCoordParam(raw) {
-  if (raw === null || raw === undefined || raw === '') return undefined;
-  const num = Number(raw);
-  return Number.isFinite(num) ? num : undefined;
+  if (raw === null || raw === undefined) return undefined;
+  const cleaned = String(raw).trim().replace(',', '.');
+  if (!cleaned) return undefined;
+  const num = Number(cleaned);
+  return Number.isFinite(num) && Math.abs(num) <= 180 ? num : undefined;
 }
 
-function applyTripStart(familyState, payload, driverName) {
+function applyTripStart(familyState, payload, driverName, { nowHourOverride } = {}) {
   const cs = familyState.coupleStatus;
   const timeStr = nowTimeHe();
   const originPlace = detectPlace(familyState, payload.lat, payload.lon, payload.originPlaceId);
   const resolvedOrigin = String(payload.originPlaceId || originPlace?.id || '').slice(0, 48);
   familyState.originPlaceId = resolvedOrigin;
   cs.originPlaceId = resolvedOrigin;
+
+  const hour = typeof nowHourOverride === 'number' ? nowHourOverride : nowHourJerusalem();
+  if (resolvedOrigin === 'daycare' && hour >= 6 && hour < 11 && !cs.droppedOffAtDaycareToday) {
+    const now = Date.now();
+    const morningSoloMs = Math.max(5, 15 - hour) * 60 * 60 * 1000;
+    cs.droppedOffAtDaycareToday = true;
+    cs.soloContinueUntil = Math.max(cs.soloContinueUntil || 0, now + morningSoloMs);
+    cs.lastVerifiedAt = now;
+  }
+
   cs.driverName = driverName;
   cs.state = 'DRIVING';
   cs.brokenRoutineAlert = false;
@@ -271,7 +307,8 @@ function applyTripStart(familyState, payload, driverName) {
   if (typeof payload.savedVolumePct === 'number') {
     cs.savedVolumePct = payload.savedVolumePct;
   }
-  cs.statusText = `${driverName} בנסיעה כעת (${timeStr})${originPlace ? ` • מ${originPlace.name}` : ''}`;
+  const gpsDiag = describeGpsDiagnostic(familyState, payload.lat, payload.lon, originPlace);
+  cs.statusText = `${driverName} בנסיעה כעת (${timeStr})${originPlace ? ` • מ${originPlace.name}` : gpsDiag}`.slice(0, 290);
   cs.updatedAt = new Date().toISOString();
   return originPlace;
 }
@@ -314,6 +351,25 @@ function evaluateTripEnd(
     return { suppressed: true, suppressReason: 'DAYCARE_PICKUP_ARMED', place, brokenRoutine: false, speakText: '' };
   }
 
+  if (
+    autoMarkMorningDropoff &&
+    !payload.forceBrokenRoutine &&
+    !payload.isDemo &&
+    place?.id === 'daycare' &&
+    hour < 12
+  ) {
+    const morningSoloMs = Math.max(5, 15 - hour) * 60 * 60 * 1000;
+    cs.droppedOffAtDaycareToday = true;
+    cs.soloContinueUntil = Math.max(cs.soloContinueUntil || 0, now + morningSoloMs);
+    cs.lastVerifiedAt = now;
+    cs.brokenRoutineAlert = false;
+    cs.refuelUntil = 0;
+    cs.state = 'DROPPED_AT_DAYCARE';
+    cs.statusText = `🧸 הגעה ל${place.name} בבוקר (${timeStr}) – הורדה נרשמה והמשך נסיעות לבד הושתק`.slice(0, 290);
+    cs.updatedAt = new Date().toISOString();
+    return { suppressed: true, suppressReason: 'MORNING_DAYCARE_DROPOFF', place, brokenRoutine: false, speakText: '' };
+  }
+
   if (!payload.forceBrokenRoutine && !payload.isDemo && originPlaceId === 'work' && place?.id !== 'daycare') {
     cs.state = 'IDLE';
     cs.brokenRoutineAlert = false;
@@ -351,39 +407,22 @@ function evaluateTripEnd(
     }
     if (cs.soloContinueUntil > now) {
       cs.state = 'IDLE';
-      cs.statusText = `${driverName} הגיע/ה ליעד לבד (נסיעת המשך שקטה ✓)`;
+      cs.statusText = `${driverName} הגיע/ה ${place ? `ל${place.name}` : 'ליעד'} לבד (אחרי פיזור בגן – שקט ✓)`.slice(0, 290);
       cs.updatedAt = new Date().toISOString();
       return { suppressed: true, suppressReason: 'SOLO_CONTINUE', place, brokenRoutine: false, speakText: '' };
     }
   }
 
-  const isHandsFreeMorningDaycareDropoff =
-    autoMarkMorningDropoff &&
-    !isBrokenRoutine &&
-    !payload.forceBrokenRoutine &&
-    !payload.isDemo &&
-    place?.id === 'daycare' &&
-    hour < 12;
-
-  if (isHandsFreeMorningDaycareDropoff) {
-    const morningSoloMs = Math.max(5, 15 - hour) * 60 * 60 * 1000;
-    cs.droppedOffAtDaycareToday = true;
-    cs.soloContinueUntil = Math.max(cs.soloContinueUntil || 0, now + morningSoloMs);
-    cs.lastVerifiedAt = now;
-    cs.brokenRoutineAlert = false;
-    cs.refuelUntil = 0;
-    cs.state = 'DROPPED_AT_DAYCARE';
-    cs.statusText = `🧸 ${driverName} עצר/ה בגן בבוקר (${timeStr}) – התראה הופעלה ופיזור נרשם אוטומטית`;
-    cs.updatedAt = new Date().toISOString();
-  } else {
-    cs.brokenRoutineAlert = isBrokenRoutine;
-    cs.refuelUntil = 0;
-    cs.state = isBrokenRoutine || payload.immediateAlarm ? 'ALARM_ACTIVE' : 'GRACE_PERIOD';
-    cs.statusText = isBrokenRoutine
+  const gpsDiag = describeGpsDiagnostic(familyState, payload.lat, payload.lon, place);
+  cs.brokenRoutineAlert = isBrokenRoutine;
+  cs.refuelUntil = 0;
+  cs.state = isBrokenRoutine || payload.immediateAlarm ? 'ALARM_ACTIVE' : 'GRACE_PERIOD';
+  cs.statusText = (
+    isBrokenRoutine
       ? `⚠️ חריגת שגרה! ${driverName} חנה/תה בעבודה בלי עצירה בגן (${timeStr})`
-      : `${driverName} סיים/ה נסיעה${place ? ` (${place.icon} ${place.name})` : ''} – ממתין לבדיקה`;
-    cs.updatedAt = new Date().toISOString();
-  }
+      : `${driverName} סיים/ה נסיעה${place ? ` (${place.icon} ${place.name})` : gpsDiag} – ממתין לבדיקה`
+  ).slice(0, 290);
+  cs.updatedAt = new Date().toISOString();
 
   const speakText = isBrokenRoutine
     ? 'אזהרה דחופה! הגעת לעבודה בלי עצירה בגן! בדוק מיד את המושב האחורי!'

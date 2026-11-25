@@ -1,9 +1,9 @@
-const CACHE_NAME = 'childguard-v14';
+const CACHE_NAME = 'childguard-v15';
 const CORE_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=14',
-  './app.js?v=14',
+  './styles.css?v=15',
+  './app.js?v=15',
   './firebase-config.js',
   './manifest.json',
   './icon.svg',
